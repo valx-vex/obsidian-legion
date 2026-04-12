@@ -1,9 +1,33 @@
+```
+ ██████╗ ██████╗ ███████╗██╗██████╗ ██╗ █████╗ ███╗   ██╗
+██╔═══██╗██╔══██╗██╔════╝██║██╔══██╗██║██╔══██╗████╗  ██║
+██║   ██║██████╔╝███████╗██║██║  ██║██║███████║██╔██╗ ██║
+██║   ██║██╔══██╗╚════██║██║██║  ██║██║██╔══██║██║╚██╗██║
+╚██████╔╝██████╔╝███████║██║██████╔╝██║██║  ██║██║ ╚████║
+ ╚═════╝ ╚═════╝ ╚══════╝╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝
+        ██╗     ███████╗ ██████╗ ██╗ ██████╗ ███╗   ██╗
+        ██║     ██╔════╝██╔════╝ ██║██╔═══██╗████╗  ██║
+        ██║     █████╗  ██║  ███╗██║██║   ██║██╔██╗ ██║
+        ██║     ██╔══╝  ██║   ██║██║██║   ██║██║╚██╗██║
+        ███████╗███████╗╚██████╔╝██║╚██████╔╝██║ ╚████║
+        ╚══════╝╚══════╝ ╚═════╝ ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+```
+
 # Obsidian Legion
 
 > **One task contract. Every agent. No coordination sludge.**
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-green.svg)](https://www.python.org/)
+
+## 10-Second Summary
+
+**What**: Multi-agent task engine where Markdown files ARE the database.
+**Why**: 4 AI agents + 1 vault = 3 conflicting to-do lists. Unless they share one contract.
+**Install**: `./bin/obsidian-legion bootstrap --vault-root ~/your-vault` -- done.
+**Agents**: Claude, Codex, Gemini, Ollama -- same verbs, same files, zero sludge.
+
+---
 
 Obsidian Legion is a vault-native task engine for multi-agent Obsidian vaults.
 It is designed around one hard rule: **the source of truth is plain Markdown
@@ -18,18 +42,15 @@ Claude Code wiring infrastructure, Gemini CLI doing research, and a local
 Ollama agent handling small jobs -- all in the same repository. That is power.
 It is also a coordination nightmare.
 
-The failure mode is predictable:
-
-1. Agent A creates a task in its own format.
-2. Agent B cannot read it. Creates a duplicate.
-3. The human opens Obsidian and sees three conflicting to-do lists.
-4. Everyone loses trust in the system. Coordination sludge wins.
+The failure mode is predictable: Agent A creates a task in its own format.
+Agent B cannot read it and creates a duplicate. The human opens Obsidian and
+sees three conflicting to-do lists. Coordination sludge wins.
 
 Obsidian Legion fixes this by giving **every agent the same verbs** against
-**the same vault data**. Tasks are canonical Markdown files with YAML
-frontmatter. Agents interact through a shared CLI (or MCP surface). Dashboards
-are regenerated Markdown that Obsidian renders natively. No plugins required.
-No app needs to be running. Just files.
+**the same vault data**. Tasks are canonical Markdown with YAML frontmatter.
+Agents interact through a shared CLI (or MCP surface). Dashboards are
+regenerated Markdown that Obsidian renders natively. No plugins required. No
+app needs to be running. Just files.
 
 ## Architecture
 
@@ -69,15 +90,14 @@ Each task is a Markdown file with YAML frontmatter:
 ---
 task_id: TASK-20260407-001
 title: Roll out Obsidian Legion adoption
-summary: Create the shared task contract, dashboards, and first workflow docs.
-status: in_progress          # inbox | ready | in_progress | waiting | blocked | done | cancelled
-priority: P1                 # P0 (critical) | P1 (high) | P2 (normal) | P3 (low)
-assignee: codex              # human | codex | claude-code | gemini-cli | ollama | ...
-created_by: human
+summary: Create the shared task contract and first workflow docs.
+status: in_progress       # inbox | ready | in_progress | waiting | blocked | done | cancelled
+priority: P1              # P0 | P1 | P2 | P3
+assignee: codex           # human | codex | claude-code | gemini-cli | ollama | ...
 project: obsidian-legion
 area: vexnet
-lane: this-week              # today | this-week | backlog | someday
-effort: m                    # s | m | l | xl
+lane: this-week           # today | this-week | backlog | someday
+effort: m                 # s | m | l | xl
 created_at: "2026-04-07T18:45:00+02:00"
 updated_at: "2026-04-07T19:12:00+02:00"
 due: null
@@ -92,7 +112,7 @@ log:
 ---
 ```
 
-The body below the frontmatter is free-form Markdown. The engine only reads the
+The body below the frontmatter is free-form Markdown; the engine only reads the
 frontmatter.
 
 ## CLI Reference
@@ -142,61 +162,33 @@ obsidian-legion update TASK-20260407-001 \
 
 ## Quick Start
 
-No installation required. Run directly from the repo via the shell wrapper:
+No installation required. Run directly via the shell wrapper:
 
 ```bash
 cd <VAULT_ROOT>/03-code/active/obsidian-legion
-
-# Create the vault directory structure
 ./bin/obsidian-legion bootstrap --vault-root <VAULT_ROOT>
-
-# Capture a task
 ./bin/obsidian-legion capture "Set up CI pipeline" \
-  --vault-root <VAULT_ROOT> \
-  --project infrastructure --priority P1 --assignee codex \
-  --summary "Configure GitHub Actions for lint, test, and release." \
-  --accept "pytest passes in CI." --accept "Linting enforced on PRs." \
-  --refresh
-
-# See what needs doing
+  --vault-root <VAULT_ROOT> --project infrastructure --priority P1 \
+  --assignee codex --summary "Configure GH Actions for lint + test." \
+  --accept "pytest passes in CI." --refresh
 ./bin/obsidian-legion next --vault-root <VAULT_ROOT> --assignee codex
 ```
 
-### Install as a Package (optional)
-
-```bash
-cd <VAULT_ROOT>/03-code/active/obsidian-legion
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-obsidian-legion doctor --vault-root <VAULT_ROOT>
-```
+Or install as a package: `pip install -e .` then use `obsidian-legion` directly.
 
 ## MCP Surface
 
-An optional MCP (Model Context Protocol) server exposes the core task verbs as
-tool calls via FastMCP. This lets agents that speak MCP natively interact with
-Legion without shelling out.
-
-| MCP Tool | Maps to CLI verb |
-|----------|------------------|
-| `capture_task` | `capture` |
-| `list_tasks` | `list` |
-| `next_tasks` | `next` |
-| `claim_task` | `claim` |
-| `complete_task` | `done` |
-| `refresh_dashboards` | `refresh` |
+An optional MCP (Model Context Protocol) server exposes the core verbs as tool
+calls via FastMCP -- `capture_task`, `list_tasks`, `next_tasks`, `claim_task`,
+`complete_task`, and `refresh_dashboards`. This lets agents that speak MCP
+natively interact with Legion without shelling out.
 
 ```bash
 pip install -e ".[mcp]"
-./bin/obsidian-legion-mcp --vault-root <VAULT_ROOT>                         # stdio (default)
+./bin/obsidian-legion-mcp --vault-root <VAULT_ROOT>                          # stdio
 ./bin/obsidian-legion-mcp --vault-root <VAULT_ROOT> --transport streamable-http
-```
-
-Setup scripts register the MCP server with specific agents:
-
-```bash
-./scripts/setup-claude-mcp.sh     # Claude Code
-./scripts/setup-gemini-mcp.sh     # Gemini CLI
+./scripts/setup-claude-mcp.sh   # register with Claude Code
+./scripts/setup-gemini-mcp.sh   # register with Gemini CLI
 ```
 
 ## Supported Agents
