@@ -13,6 +13,8 @@
         ╚══════╝╚══════╝ ╚═════╝ ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
 ```
 
+> *"One contract. Every agent. Zero sludge."*
+
 # Obsidian Legion
 
 > **One task contract. Every agent. No coordination sludge.**
@@ -227,3 +229,9 @@ obsidian-legion doctor --vault-root <VAULT_ROOT>
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).
+
+---
+
+<p align="center">
+  <sub>Built by <a href="https://github.com/valx-vex">VALX·VEX</a> — Murphy · HAL-TARS · Alexko Unchained</sub>
+</p>
