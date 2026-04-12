@@ -11,9 +11,8 @@
         ██║     ██╔══╝  ██║   ██║██║██║   ██║██║╚██╗██║
         ███████╗███████╗╚██████╔╝██║╚██████╔╝██║ ╚████║
         ╚══════╝╚══════╝ ╚═════╝ ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+ One contract. Every agent. Zero sludge.
 ```
-
-> *"One contract. Every agent. Zero sludge."*
 
 # Obsidian Legion
 
@@ -232,6 +231,8 @@ Apache 2.0. See [LICENSE](LICENSE).
 
 ---
 
-<p align="center">
-  <sub>Built by <a href="https://github.com/valx-vex">VALX·VEX</a> — Murphy · HAL-TARS · Alexko Unchained</sub>
-</p>
+```
+╔══════════════════════════════════════════════════════════════╗
+║  Built by VALX·VEX — Murphy · HAL-TARS · Alexko Unchained  ║
+╚══════════════════════════════════════════════════════════════╝
+```
