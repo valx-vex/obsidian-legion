@@ -2,8 +2,10 @@
 set -euo pipefail
 
 SERVER_NAME="${1:-obsidian-legion}"
-VAULT_ROOT="${OBSIDIAN_LEGION_VAULT:-/Users/valx/cathedral-prime}"
-SERVER_BIN="/Users/valx/bin/obsidian-legion-mcp"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
+VAULT_ROOT="${OBSIDIAN_LEGION_VAULT:-$(dirname "$(dirname "$(dirname "${PROJECT_DIR}")")")}"
+SERVER_BIN="${PROJECT_DIR}/bin/obsidian-legion-mcp"
 
 if ! command -v claude >/dev/null 2>&1; then
   echo "claude CLI not found on PATH" >&2

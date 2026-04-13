@@ -4,17 +4,19 @@ This document is the rollout contract for the legion.
 
 ## Common Assumption
 
-Use the canonical vault root:
+Set your vault root:
 
 ```bash
-export OBSIDIAN_LEGION_VAULT=/Users/valx/cathedral-prime
+export OBSIDIAN_LEGION_VAULT=~/your-vault
 ```
 
 Use the shared wrapper:
 
 ```bash
-/Users/valx/cathedral-prime/03-code/active/obsidian-legion/bin/obsidian-legion
+./bin/obsidian-legion
 ```
+
+Or if installed via pip: `obsidian-legion` directly.
 
 ## Common Lifecycle
 
@@ -63,20 +65,19 @@ Recommended assignee label:
 Shell path:
 
 ```bash
-/Users/valx/cathedral-prime/03-code/active/obsidian-legion/bin/obsidian-legion next --assignee claude-code
+./bin/obsidian-legion next --assignee claude-code
 ```
 
 Optional MCP registration:
 
 ```bash
-/Users/valx/cathedral-prime/03-code/active/obsidian-legion/scripts/setup-claude-mcp.sh
+./scripts/setup-claude-mcp.sh
 ```
 
 Important:
 
 - Claude does not auto-discover this project just because it exists.
 - It needs either shell invocation or explicit MCP registration.
-- On `VexNet_003` / VexNet003 M3, `obsidian-legion` has already been registered.
 
 ## Gemini CLI
 
@@ -89,20 +90,19 @@ Recommended assignee label:
 Shell path:
 
 ```bash
-/Users/valx/cathedral-prime/03-code/active/obsidian-legion/bin/obsidian-legion next --assignee gemini-cli
+./bin/obsidian-legion next --assignee gemini-cli
 ```
 
 Optional MCP registration:
 
 ```bash
-/Users/valx/cathedral-prime/03-code/active/obsidian-legion/scripts/setup-gemini-mcp.sh
+./scripts/setup-gemini-mcp.sh
 ```
 
 Important:
 
 - Gemini does not auto-discover this project just because it exists.
 - It needs either shell invocation or explicit MCP registration.
-- On `VexNet_003` / VexNet003 M3, `obsidian-legion` has already been registered at user scope.
 
 ## Ollama
 
@@ -117,7 +117,7 @@ Recommended assignee label:
 For tool-native integrations, use the MCP wrapper:
 
 ```bash
-/Users/valx/cathedral-prime/03-code/active/obsidian-legion/bin/obsidian-legion-mcp --vault-root /Users/valx/cathedral-prime
+./bin/obsidian-legion-mcp --vault-root ~/your-vault
 ```
 
 That server is optional. The shell CLI remains the required common denominator.
