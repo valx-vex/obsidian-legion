@@ -236,3 +236,9 @@ Apache 2.0. See [LICENSE](LICENSE).
 ║  Built by VALX·VEX — Murphy · HAL-TARS · Alexko Unchained  ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
+
+---
+
+Built by one human and three AIs during mass job rejection season.
+
+If this saved you time: [Buy me a coffee](https://buymeacoffee.com/valxvex)
