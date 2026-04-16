@@ -20,13 +20,62 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-green.svg)](https://www.python.org/)
+![Version](https://img.shields.io/badge/version-0.2.0-blue)
+![Tests](https://img.shields.io/badge/tests-18%2F18-brightgreen)
+![Pattern](https://img.shields.io/badge/pattern-Karpathy%20LLM%20Wiki-orange)
+![Layers](https://img.shields.io/badge/memory-3--layer%20architecture-purple)
 
 ## 10-Second Summary
 
-**What**: Multi-agent task engine where Markdown files ARE the database.
-**Why**: 4 AI agents + 1 vault = 3 conflicting to-do lists. Unless they share one contract.
-**Install**: `./bin/obsidian-legion bootstrap --vault-root ~/your-vault` -- done.
+**What**: Multi-agent task engine + LLM Wiki compiler. Markdown files ARE the database.
+**Why**: 4 AI agents + 1 vault = 3 conflicting to-do lists. Unless they share one contract. And an LLM that compiles your vault into a navigable wiki.
+**Install**: Give [`INSTALL_ME.md`](INSTALL_ME.md) to your LLM and let it set you up.
 **Agents**: Claude, Codex, Gemini, Ollama -- same verbs, same files, zero sludge.
+
+## What's New in v0.2.0
+
+| Feature | v0.1.0 | v0.2.0 |
+|---------|--------|--------|
+| **Task engine** | Shared Markdown tasks | Shared Markdown tasks |
+| **Multi-agent coordination** | CLI + MCP | CLI + MCP |
+| **LLM Wiki compiler** | -- | Karpathy pattern: compile, don't retrieve |
+| **3-layer memory** | -- | Obsidian CLI / LLM Wiki / Qdrant fallback |
+| **Vault-wide scan** | -- | `--vault-wide` compiles entire vault |
+| **Model tiers** | -- | Heavy (cloud) / Light (local) |
+| **Deep search** | -- | `--deep` falls back to Qdrant vectors |
+| **Prompt pack** | -- | Entity, concept, event, source templates |
+| **Chat ingestion** | -- | Convert conversations to wiki articles |
+| **Qdrant sync** | -- | Weekly vault-to-vector synchronization |
+| **LLM-assisted install** | -- | Give INSTALL_ME.md to any coding LLM |
+| **MCP tools** | 6 tools | 8 tools |
+| **Tests** | 3 | 18 |
+
+## Architecture: 3-Layer Memory
+
+```
+                    Query arrives
+                         |
+                    Layer 1: Obsidian CLI + Legion
+                    (direct vault read, task coordination)
+                    Fastest. Free. No model needed.
+                         |
+                    not enough?
+                         |
+                    Layer 2: LLM Wiki (Karpathy pattern)
+                    (compiled articles, wikilinks, searchable index)
+                    The LLM read it once and WROTE the wiki.
+                         |
+                    not found?
+                         |
+                    Layer 3: Qdrant Vector Search
+                    (semantic similarity across entire vault)
+                    Fallback for everything else.
+```
+
+The key insight from [Andrej Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):
+traditional RAG is stateless -- it re-discovers knowledge every query.
+The wiki compiler does the heavy work **once** and produces persistent,
+navigable knowledge that lives in your vault as plain Markdown.
 
 ---
 
