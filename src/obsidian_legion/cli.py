@@ -85,6 +85,36 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("refresh", help="Rebuild dashboards and human rollups.")
     subparsers.add_parser("doctor", help="Show task-system health and detected paths.")
 
+    wiki = subparsers.add_parser("wiki", help="LLM Wiki commands (Karpathy pattern).")
+    wiki_sub = wiki.add_subparsers(dest="wiki_command", required=True)
+
+    wiki_sub.add_parser("bootstrap", help="Create wiki/ and raw/ directories with seed files.")
+
+    wiki_ingest = wiki_sub.add_parser("ingest", help="Ingest a raw file into the wiki.")
+    wiki_ingest.add_argument("path", type=Path, help="Path to raw file.")
+
+    wiki_compile = wiki_sub.add_parser("compile", help="Compile all new/changed raw files.")
+    wiki_compile.add_argument("--dry-run", action="store_true", help="Show what would be compiled.")
+    wiki_compile.add_argument("--vault-wide", action="store_true", help="Scan entire vault instead of just raw/.")
+    wiki_compile.add_argument("--tier", choices=["heavy", "light"], default=None, help="Compilation tier (heavy=detailed, light=fast).")
+
+    wiki_search = wiki_sub.add_parser("search", help="Search wiki articles.")
+    wiki_search.add_argument("query", help="Search query.")
+    wiki_search.add_argument("--limit", type=int, default=10)
+    wiki_search.add_argument("--deep", action="store_true", help="Enable deep vector search via Qdrant fallback.")
+
+    wiki_sub.add_parser("status", help="Show wiki compilation status.")
+
+    wiki_list = wiki_sub.add_parser("list", help="List wiki articles.")
+    wiki_list.add_argument("--type", choices=["entity", "topic", "source"])
+
+    wiki_get = wiki_sub.add_parser("get", help="Show a wiki article.")
+    wiki_get.add_argument("article_id", help="Article ID (slug).")
+
+    for p in [wiki_ingest, wiki_compile, wiki_search, wiki_list, wiki_get]:
+        p.add_argument("--provider", choices=["ollama", "claude"], help="LLM provider override.")
+        p.add_argument("--model", help="LLM model override.")
+
     return parser
 
 
@@ -205,7 +235,103 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(store.doctor(), indent=2))
         return 0
 
+    if args.command == "wiki":
+        return _handle_wiki(args, store)
+
     parser.error(f"Unsupported command: {args.command}")
+    return 2
+
+
+def _handle_wiki(args, task_store: TaskStore) -> int:
+    from .wiki_compiler import WikiCompiler
+    from .wiki_store import WikiStore
+
+    paths = task_store.paths
+    compiler_kwargs: dict = {}
+    if getattr(args, "provider", None):
+        compiler_kwargs["provider"] = args.provider
+    if getattr(args, "model", None):
+        compiler_kwargs["model"] = args.model
+
+    tier = getattr(args, "tier", None)
+    if tier:
+        compiler_kwargs["tier"] = tier
+    if compiler_kwargs:
+        compiler = WikiCompiler(**compiler_kwargs)
+    else:
+        compiler = None
+    wiki = WikiStore(paths, compiler=compiler)
+
+    if args.wiki_command == "bootstrap":
+        created = wiki.bootstrap()
+        if created:
+            print("Wiki bootstrapped:")
+            for path in created:
+                print(f"  {path}")
+        else:
+            print("Wiki layout already present.")
+        return 0
+
+    if args.wiki_command == "ingest":
+        raw_path = args.path.expanduser().resolve()
+        articles = wiki.ingest(raw_path)
+        if articles:
+            print(f"Ingested {len(articles)} article(s):")
+            for article in articles:
+                print(f"  {article.article_id} ({article.article_type}) -- {article.summary}")
+        else:
+            print("Already up to date.")
+        return 0
+
+    if args.wiki_command == "compile":
+        dry_run = getattr(args, "dry_run", False)
+        vault_wide = getattr(args, "vault_wide", False)
+        if vault_wide:
+            articles = wiki.compile_vault(dry_run=dry_run)
+        else:
+            articles = wiki.compile_all(dry_run=dry_run)
+        if dry_run:
+            return 0
+        if articles:
+            print(f"Compiled {len(articles)} article(s):")
+            for article in articles:
+                print(f"  {article.article_id} ({article.article_type})")
+        else:
+            print("Nothing to compile.")
+        return 0
+
+    if args.wiki_command == "search":
+        deep = getattr(args, "deep", False)
+        results = wiki.search(args.query, limit=args.limit, deep=deep)
+        if not results:
+            print("No results.")
+            return 0
+        for article in results:
+            print(f"  {article.article_id} ({article.article_type}) -- {article.summary}")
+        return 0
+
+    if args.wiki_command == "status":
+        print(json.dumps(wiki.status(), indent=2))
+        return 0
+
+    if args.wiki_command == "list":
+        articles = wiki.list_articles(article_type=getattr(args, "type", None))
+        if not articles:
+            print("No articles.")
+            return 0
+        for article in articles:
+            print(f"  {article.article_id} ({article.article_type}) -- {article.summary}")
+        return 0
+
+    if args.wiki_command == "get":
+        try:
+            article = wiki.get_article(args.article_id)
+        except KeyError:
+            print(f"Article not found: {args.article_id}")
+            return 1
+        print(article.to_markdown())
+        return 0
+
     return 2
 
 

@@ -73,6 +73,65 @@ def build_mcp(paths: LegionPaths):
     def refresh_dashboards() -> list[str]:
         return [str(path) for path in store.refresh()]
 
+    # --- Wiki tools (Karpathy LLM Wiki pattern) ---
+
+    from .wiki_store import WikiStore
+
+    wiki = WikiStore(paths)
+
+    @mcp.tool()
+    def wiki_bootstrap() -> dict:
+        """Create wiki/ and raw/ directories with seed files."""
+        created = wiki.bootstrap()
+        return {"created": [str(p) for p in created]}
+
+    @mcp.tool()
+    def wiki_ingest(raw_path: str) -> dict:
+        """Ingest a raw file into the wiki via LLM compilation."""
+        articles = wiki.ingest(Path(raw_path).expanduser().resolve())
+        return {"articles": [a.to_dict() for a in articles]}
+
+    @mcp.tool()
+    def wiki_compile() -> dict:
+        """Compile all new/changed raw files into wiki articles."""
+        articles = wiki.compile_all()
+        return {
+            "compiled": len(articles),
+            "articles": [a.to_dict() for a in articles],
+        }
+
+    @mcp.tool()
+    def wiki_compile_vault(dry_run: bool = False) -> dict:
+        """Compile all new/changed .md files across the entire vault into wiki articles.
+
+        Scans the full vault (excluding wiki/, .obsidian/, .git/, node_modules/, .venv/, __pycache__/).
+        Uses manifest tracking to skip already-ingested files and detect changes by hash.
+        """
+        articles = wiki.compile_vault(dry_run=dry_run)
+        return {
+            "compiled": len(articles),
+            "articles": [a.to_dict() for a in articles],
+        }
+
+    @mcp.tool()
+    def wiki_search(query: str, limit: int = 10, deep: bool = False) -> list[dict]:
+        """Search the wiki for articles matching a query.
+
+        When deep=True, falls back to Qdrant vector search if text search returns fewer than `limit` results.
+        """
+        return [a.to_dict() for a in wiki.search(query, limit=limit, deep=deep)]
+
+    @mcp.tool()
+    def wiki_status() -> dict:
+        """Show wiki compilation status: counts, pending files, paths."""
+        return wiki.status()
+
+    @mcp.tool()
+    def wiki_list(article_type: str = "") -> list[dict]:
+        """List all wiki articles, optionally filtered by type (entity/topic/source)."""
+        atype = article_type if article_type else None
+        return [a.to_dict() for a in wiki.list_articles(article_type=atype)]
+
     return mcp
 
 

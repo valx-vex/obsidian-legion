@@ -161,21 +161,71 @@ obsidian-legion update TASK-20260407-001 \
   --status blocked --log-note "Waiting on API key." --refresh
 ```
 
-## Quick Start
+## Installation
 
-No installation required. Run directly via the shell wrapper:
+### Option 1: Give This Repo to Your LLM (Recommended)
+
+Clone the repo, then hand [`INSTALL_ME.md`](INSTALL_ME.md) to Claude Code, Codex,
+Gemini CLI, or any coding LLM. It contains step-by-step instructions the LLM
+can follow to set everything up for your specific environment.
 
 ```bash
-cd <VAULT_ROOT>/03-code/active/obsidian-legion
-./bin/obsidian-legion bootstrap --vault-root <VAULT_ROOT>
-./bin/obsidian-legion capture "Set up CI pipeline" \
-  --vault-root <VAULT_ROOT> --project infrastructure --priority P1 \
-  --assignee codex --summary "Configure GH Actions for lint + test." \
-  --accept "pytest passes in CI." --refresh
-./bin/obsidian-legion next --vault-root <VAULT_ROOT> --assignee codex
+git clone https://github.com/valx-vex/obsidian-legion.git
+cd obsidian-legion
+# Now open your LLM and say: "Read INSTALL_ME.md and set this up for my vault at ~/my-vault"
 ```
 
-Or install as a package: `pip install -e .` then use `obsidian-legion` directly.
+### Option 2: Installer Script
+
+```bash
+git clone https://github.com/valx-vex/obsidian-legion.git
+cd obsidian-legion
+bash install.sh
+```
+
+Checks prerequisites (Python 3.11+, Ollama), creates a virtual environment,
+installs dependencies, and pulls the default model.
+
+### Option 3: Manual
+
+```bash
+git clone https://github.com/valx-vex/obsidian-legion.git
+cd obsidian-legion
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[all]"
+ollama pull llama3.2:3b
+```
+
+### Prerequisites
+
+- **Python 3.11+** -- [python.org](https://python.org) or `brew install python`
+- **Ollama** -- [ollama.com/download](https://ollama.com/download) (for wiki compilation)
+- **An Obsidian vault** -- or any directory of Markdown files
+
+## Quick Start
+
+```bash
+source .venv/bin/activate
+
+# Bootstrap task system + wiki
+./bin/obsidian-legion bootstrap --vault-root ~/my-vault
+./bin/obsidian-legion wiki bootstrap --vault-root ~/my-vault
+
+# Add a file and compile your first wiki
+cp my-notes.md ~/my-vault/raw/
+./bin/obsidian-legion wiki compile --vault-root ~/my-vault
+
+# Or compile from your entire vault
+./bin/obsidian-legion wiki compile --vault-wide --vault-root ~/my-vault
+
+# Search your wiki
+./bin/obsidian-legion wiki search "any topic" --vault-root ~/my-vault
+
+# Task management
+./bin/obsidian-legion capture "My task" \
+  --summary "What needs to be done" --vault-root ~/my-vault
+./bin/obsidian-legion next --vault-root ~/my-vault
+```
 
 ## MCP Surface
 
@@ -215,12 +265,106 @@ details.
 - **[hal-tars-blueprint](../hal-tars-blueprint/)** -- Engineering agent
   blueprint. Uses Legion as its task backbone for coordinated multi-agent builds.
 
+## LLM Wiki (Karpathy Pattern)
+
+**New in v0.2.0**: Obsidian Legion now includes an LLM-powered wiki compiler
+based on [Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
+
+Instead of traditional RAG (stateless retrieval that re-discovers knowledge
+every query), the wiki compiler uses an LLM to **compile** raw documents into
+persistent, structured wiki articles. The LLM reads once, extracts entities and
+themes, writes encyclopedia-style articles with `[[wikilinks]]`, and maintains
+an index. The result is a navigable knowledge base that lives in your vault as
+plain Markdown.
+
+### 3-Layer Memory Architecture
+
+| Layer | Purpose | Technology |
+|-------|---------|------------|
+| **1. Obsidian CLI + Legion** | Structured vault access, task coordination | This project |
+| **2. LLM Wiki** | Compiled knowledge (NOT stateless retrieval) | Karpathy pattern |
+| **3. Lazarus / Qdrant** | Semantic vector fallback for large-scale search | Optional |
+
+### Wiki Quick Start
+
+```bash
+# Bootstrap wiki directories
+obsidian-legion wiki bootstrap --vault-root <VAULT_ROOT>
+
+# Add raw source files to raw/
+cp my-notes.md <VAULT_ROOT>/raw/2026-04-16-my-notes.md
+
+# Compile all pending raw files into wiki articles
+obsidian-legion wiki compile --vault-root <VAULT_ROOT>
+
+# Search compiled wiki
+obsidian-legion wiki search "consciousness" --vault-root <VAULT_ROOT>
+
+# Check compilation status
+obsidian-legion wiki status --vault-root <VAULT_ROOT>
+```
+
+### Wiki CLI Reference
+
+| Verb | Description |
+|------|-------------|
+| `wiki bootstrap` | Create `wiki/` and `raw/` directories with seed files |
+| `wiki ingest <path>` | Ingest a specific raw file via LLM compilation |
+| `wiki compile` | Compile all new/changed raw files (supports `--dry-run`) |
+| `wiki search <query>` | Search wiki articles by title, tags, content |
+| `wiki status` | Show compilation stats (raw count, ingested, pending, articles) |
+| `wiki list` | List all wiki articles (filter with `--type entity\|topic\|source`) |
+| `wiki get <id>` | Show a specific article by slug |
+
+### Wiki Vault Structure
+
+```
+<VAULT_ROOT>/
+├── raw/                    # Immutable sources (you add files here)
+│   └── YYYY-MM-DD-*.md
+├── wiki/                   # LLM-compiled knowledge base
+│   ├── index.md           # Content catalog
+│   ├── log.md             # Append-only event log
+│   ├── state.md           # Snapshot state
+│   ├── .manifest.json     # Tracks ingested sources
+│   ├── entities/          # People, organizations, concepts
+│   ├── topics/            # Synthesized thematic articles
+│   └── sources/           # Reference stubs
+└── 06-daily/action-points/ # Task system (unchanged)
+```
+
+### Wiki MCP Tools
+
+The MCP server exposes wiki operations alongside task tools:
+
+| Tool | Description |
+|------|-------------|
+| `wiki_bootstrap` | Create wiki directories |
+| `wiki_ingest` | Ingest a raw file |
+| `wiki_compile` | Compile all pending files |
+| `wiki_search` | Search wiki articles |
+| `wiki_status` | Compilation status |
+| `wiki_list` | List articles |
+
+### LLM Configuration
+
+Create `<VAULT_ROOT>/wiki/.wiki_config.yaml` to customize the LLM provider:
+
+```yaml
+provider: ollama           # or "claude"
+model: llama3.2:3b         # any Ollama model or Claude model ID
+ollama_url: http://localhost:11434
+```
+
+Defaults to Ollama with `llama3.2:3b`. For Claude, set `ANTHROPIC_API_KEY` in
+your environment.
+
 ## Development
 
 ```bash
 cd <VAULT_ROOT>/03-code/active/obsidian-legion
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[mcp]"
+pip install -e ".[all]"
 pytest
 obsidian-legion doctor --vault-root <VAULT_ROOT>
 ```

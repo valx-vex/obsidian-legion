@@ -18,11 +18,26 @@ class LegionPaths:
     daily_root: Path
     agents_file: Path
     counter_file: Path
+    # Wiki paths (Karpathy LLM Wiki pattern)
+    wiki_root: Path
+    raw_root: Path
+    wiki_index: Path
+    wiki_log: Path
+    wiki_state: Path
+    wiki_manifest: Path
+    wiki_entities: Path
+    wiki_topics: Path
+    wiki_sources: Path
+    wiki_config: Path
+    # Qdrant vector search settings
+    qdrant_url: str
+    qdrant_collection: str
 
     @classmethod
     def discover(cls, vault_root: Path | None = None) -> "LegionPaths":
         root = cls._resolve_vault_root(vault_root)
         action_points_root = root / "06-daily" / "action-points"
+        wiki_root = root / "wiki"
         return cls(
             vault_root=root,
             action_points_root=action_points_root,
@@ -35,6 +50,18 @@ class LegionPaths:
             daily_root=action_points_root / "daily",
             agents_file=action_points_root / "config" / "agents.yaml",
             counter_file=action_points_root / "state" / "id-counter.json",
+            wiki_root=wiki_root,
+            raw_root=root / "raw",
+            wiki_index=wiki_root / "index.md",
+            wiki_log=wiki_root / "log.md",
+            wiki_state=wiki_root / "state.md",
+            wiki_manifest=wiki_root / ".manifest.json",
+            wiki_entities=wiki_root / "entities",
+            wiki_topics=wiki_root / "topics",
+            wiki_sources=wiki_root / "sources",
+            wiki_config=wiki_root / ".wiki_config.yaml",
+            qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
+            qdrant_collection=os.environ.get("QDRANT_COLLECTION", "vexpedia"),
         )
 
     @staticmethod
@@ -69,6 +96,16 @@ class LegionPaths:
             self.config_root,
             self.state_root,
             self.daily_root,
+        ]:
+            path.mkdir(parents=True, exist_ok=True)
+
+    def ensure_wiki_layout(self) -> None:
+        for path in [
+            self.wiki_root,
+            self.raw_root,
+            self.wiki_entities,
+            self.wiki_topics,
+            self.wiki_sources,
         ]:
             path.mkdir(parents=True, exist_ok=True)
 
