@@ -418,7 +418,7 @@ def dispatch_to_gemini(prompt: str, cwd: Optional[str] = None) -> Dict[str, Any]
 
 def dispatch_to_codex(prompt: str, cwd: Optional[str] = None, output_schema: Optional[str] = None) -> Dict[str, Any]:
     codex_bin = os.environ.get("CODEX_CLI_BIN", "codex")
-    argv = [codex_bin, "exec", "--json", prompt]
+    argv = [codex_bin, "exec", prompt]
     if output_schema:
         argv.extend(["--output-schema", output_schema])
     result = run_command(argv, cwd=cwd, timeout=MAX_TIMEOUT)
@@ -474,7 +474,7 @@ FAILBACK_ORDER = ["ollama", "codex", "gemini", "claude"]
 def dispatch_with_failback(prompt: str, cwd: str | None = None) -> dict[str, Any]:
     """Try each provider in order until one succeeds."""
     dispatchers = {
-        "ollama": lambda: dispatch_to_ollama(prompt),
+        "ollama": lambda: ollama_chat(prompt),
         "codex": lambda: dispatch_to_codex(prompt, cwd=cwd),
         "gemini": lambda: dispatch_to_gemini(prompt, cwd=cwd),
         "claude": lambda: {"ok": True, "worker": "claude", "content": "(kept by Claude — no dispatch)"},
@@ -506,7 +506,7 @@ def ping_all_providers() -> dict[str, Any]:
 
     # Ollama
     try:
-        r = dispatch_to_ollama(test_prompt)
+        r = ollama_chat(test_prompt)
         results["ollama"] = {"ok": r["ok"], "response": r.get("content", "")[:100], "elapsed": r.get("elapsed_s")}
     except Exception as e:
         results["ollama"] = {"ok": False, "error": str(e)}
