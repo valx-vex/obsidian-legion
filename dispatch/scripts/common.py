@@ -311,11 +311,17 @@ def run_command(
             "cwd": cwd,
         }
     except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
         return {
             "ok": False,
             "returncode": 124,
-            "stdout": exc.stdout or "",
-            "stderr": (exc.stderr or "") + f"\nTimed out after {timeout}s",
+            "stdout": stdout,
+            "stderr": stderr + f"\nTimed out after {timeout}s",
             "elapsed_s": round(now_ts() - started, 3),
             "argv": argv,
             "cwd": cwd,
@@ -418,10 +424,10 @@ def dispatch_to_gemini(prompt: str, cwd: Optional[str] = None) -> Dict[str, Any]
 
 def dispatch_to_codex(prompt: str, cwd: Optional[str] = None, output_schema: Optional[str] = None) -> Dict[str, Any]:
     codex_bin = os.environ.get("CODEX_CLI_BIN", "codex")
-    argv = [codex_bin, "exec", prompt]
+    argv = [codex_bin, "exec"]
     if output_schema:
         argv.extend(["--output-schema", output_schema])
-    result = run_command(argv, cwd=cwd, timeout=MAX_TIMEOUT)
+    result = run_command(argv, cwd=cwd, input_text=prompt, timeout=MAX_TIMEOUT)
     return {
         "ok": result["ok"],
         "worker": "codex",
