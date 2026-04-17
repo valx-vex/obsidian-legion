@@ -29,6 +29,7 @@ class LegionPaths:
     wiki_topics: Path
     wiki_sources: Path
     wiki_config: Path
+    wiki_public_root: Path
     # Qdrant vector search settings
     qdrant_url: str
     qdrant_collection: str
@@ -60,6 +61,7 @@ class LegionPaths:
             wiki_topics=wiki_root / "topics",
             wiki_sources=wiki_root / "sources",
             wiki_config=wiki_root / ".wiki_config.yaml",
+            wiki_public_root=root / "wiki-public",
             qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
             qdrant_collection=os.environ.get("QDRANT_COLLECTION", "vexpedia"),
         )
@@ -106,6 +108,7 @@ class LegionPaths:
             self.wiki_entities,
             self.wiki_topics,
             self.wiki_sources,
+            self.wiki_public_root,
         ]:
             path.mkdir(parents=True, exist_ok=True)
 

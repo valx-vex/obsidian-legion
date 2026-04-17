@@ -96,6 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     wiki_compile = wiki_sub.add_parser("compile", help="Compile all new/changed raw files.")
     wiki_compile.add_argument("--dry-run", action="store_true", help="Show what would be compiled.")
     wiki_compile.add_argument("--vault-wide", action="store_true", help="Scan entire vault instead of just raw/.")
+    wiki_compile.add_argument("--public", action="store_true", help="Compile only non-ignored files into wiki-public/.")
     wiki_compile.add_argument("--tier", choices=["heavy", "light"], default=None, help="Compilation tier (heavy=detailed, light=fast).")
 
     wiki_search = wiki_sub.add_parser("search", help="Search wiki articles.")
@@ -108,10 +109,13 @@ def build_parser() -> argparse.ArgumentParser:
     wiki_list = wiki_sub.add_parser("list", help="List wiki articles.")
     wiki_list.add_argument("--type", choices=["entity", "topic", "source"])
 
+    wiki_export = wiki_sub.add_parser("export", help="Export public wiki to an external directory.")
+    wiki_export.add_argument("output_dir", type=Path, help="Output directory for exported wiki.")
+
     wiki_get = wiki_sub.add_parser("get", help="Show a wiki article.")
     wiki_get.add_argument("article_id", help="Article ID (slug).")
 
-    for p in [wiki_ingest, wiki_compile, wiki_search, wiki_list, wiki_get]:
+    for p in [wiki_ingest, wiki_compile, wiki_search, wiki_list, wiki_get, wiki_export]:
         p.add_argument("--provider", choices=["ollama", "claude"], help="LLM provider override.")
         p.add_argument("--model", help="LLM model override.")
 
@@ -286,7 +290,10 @@ def _handle_wiki(args, task_store: TaskStore) -> int:
     if args.wiki_command == "compile":
         dry_run = getattr(args, "dry_run", False)
         vault_wide = getattr(args, "vault_wide", False)
-        if vault_wide:
+        public = getattr(args, "public", False)
+        if public:
+            articles = wiki.compile_public(dry_run=dry_run)
+        elif vault_wide:
             articles = wiki.compile_vault(dry_run=dry_run)
         else:
             articles = wiki.compile_all(dry_run=dry_run)
@@ -298,6 +305,17 @@ def _handle_wiki(args, task_store: TaskStore) -> int:
                 print(f"  {article.article_id} ({article.article_type})")
         else:
             print("Nothing to compile.")
+        return 0
+
+    if args.wiki_command == "export":
+        output_dir = args.output_dir.expanduser().resolve()
+        exported = wiki.export_public(output_dir)
+        if exported:
+            print(f"Exported {len(exported)} file(s) to {output_dir}:")
+            for path in exported:
+                print(f"  {path}")
+        else:
+            print("Nothing to export.")
         return 0
 
     if args.wiki_command == "search":

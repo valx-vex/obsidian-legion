@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import fnmatch
 import os
+import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +40,18 @@ class WikiStore:
         if not self.paths.wiki_manifest.exists():
             WikiManifest().save(self.paths.wiki_manifest)
             created.append(self.paths.wiki_manifest)
+
+        wikiignore_path = self.paths.vault_root / ".wikiignore"
+        if not wikiignore_path.exists():
+            _write_atomic(
+                wikiignore_path,
+                "# .wikiignore — files matching these patterns are excluded from public wiki\n"
+                "# Syntax: same as .gitignore (glob patterns)\n"
+                "# Example:\n"
+                "# raw/private-*\n"
+                "# wiki/entities/personal-*\n",
+            )
+            created.append(wikiignore_path)
 
         return created
 
@@ -118,6 +132,84 @@ class WikiStore:
             all_articles.extend(articles)
 
         return all_articles
+
+    def _load_wikiignore(self) -> list[str]:
+        ignore_path = self.paths.vault_root / ".wikiignore"
+        if not ignore_path.exists():
+            return []
+        return [
+            line.strip()
+            for line in ignore_path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+
+    def _is_ignored(self, path: Path, patterns: list[str]) -> bool:
+        try:
+            relative = str(path.relative_to(self.paths.vault_root))
+        except ValueError:
+            return False
+        return any(
+            fnmatch.fnmatch(relative, pat) or fnmatch.fnmatch(path.name, pat)
+            for pat in patterns
+        )
+
+    def compile_public(self, dry_run: bool = False) -> list[WikiArticle]:
+        """Compile only non-ignored files into wiki-public/."""
+        self.bootstrap()
+        self.paths.wiki_public_root.mkdir(parents=True, exist_ok=True)
+        patterns = self._load_wikiignore()
+        manifest = WikiManifest.load(self.paths.wiki_manifest)
+
+        # Get pending files, filter out ignored
+        pending = self._find_pending(manifest)
+        if patterns:
+            pending = [p for p in pending if not self._is_ignored(p, patterns)]
+
+        if dry_run:
+            for p in pending:
+                print(f"Would compile (public): {p}")
+            return []
+
+        articles: list[WikiArticle] = []
+        for raw_path in pending:
+            result_articles = self.ingest(raw_path)
+            articles.extend(result_articles)
+
+        # Copy non-ignored articles to wiki-public/
+        self._sync_public_wiki(patterns)
+        return articles
+
+    def _sync_public_wiki(self, patterns: list[str]) -> None:
+        """Copy non-ignored wiki articles to wiki-public/."""
+        public = self.paths.wiki_public_root
+        public.mkdir(parents=True, exist_ok=True)
+        for subdir_name in ["entities", "topics", "sources"]:
+            src = self.paths.wiki_root / subdir_name
+            dst = public / subdir_name
+            dst.mkdir(parents=True, exist_ok=True)
+            if not src.exists():
+                continue
+            for md in src.rglob("*.md"):
+                if not self._is_ignored(md, patterns):
+                    shutil.copy2(md, dst / md.name)
+        # Copy index, state (not log — internal)
+        for f in ["index.md", "state.md"]:
+            src_f = self.paths.wiki_root / f
+            if src_f.exists():
+                shutil.copy2(src_f, public / f)
+
+    def export_public(self, output_dir: Path) -> list[Path]:
+        """Export public wiki to an external directory."""
+        patterns = self._load_wikiignore()
+        self._sync_public_wiki(patterns)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        exported: list[Path] = []
+        for item in self.paths.wiki_public_root.rglob("*.md"):
+            dest = output_dir / item.relative_to(self.paths.wiki_public_root)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, dest)
+            exported.append(dest)
+        return exported
 
     def search(self, query: str, limit: int = 10, deep: bool = False) -> list[WikiArticle]:
         query_lower = query.lower()

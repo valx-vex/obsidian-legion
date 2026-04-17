@@ -114,6 +114,18 @@ def build_mcp(paths: LegionPaths):
         }
 
     @mcp.tool()
+    def wiki_compile_public(dry_run: bool = False) -> dict:
+        """Compile non-ignored files into public wiki."""
+        articles = wiki.compile_public(dry_run=dry_run)
+        return {"compiled": len(articles), "articles": [a.to_dict() for a in articles]}
+
+    @mcp.tool()
+    def wiki_export(output_dir: str) -> dict:
+        """Export public wiki to external directory."""
+        exported = wiki.export_public(Path(output_dir))
+        return {"exported": [str(p) for p in exported]}
+
+    @mcp.tool()
     def wiki_search(query: str, limit: int = 10, deep: bool = False) -> list[dict]:
         """Search the wiki for articles matching a query.
 
