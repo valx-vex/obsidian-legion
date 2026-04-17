@@ -1,122 +1,139 @@
 # Multi-LLM Dispatch System
 
-Route prompts to the cheapest capable worker: Ollama (local), Gemini CLI, Codex CLI, or Claude.
+Route prompts to the cheapest capable worker: Ollama, Gemini CLI, Codex CLI, or Claude.
 
 ## What this is
 
-A staged hybrid dispatch layer for Obsidian Legion. Claude Code stays the orchestrator. Explicit MCP bridge tools provide the first delegation path. Hooks run in shadow mode only for classification and policy logging.
+A staged hybrid dispatch layer for Obsidian Legion. Claude Code stays the orchestrator. The canonical MCP path is now FastMCP bridge scripts launched with the project venv Python and registered in Claude Code with `-s user`.
 
-## Directory layout
+## Canonical MCP Bridge Path
 
+Use these FastMCP bridge scripts:
+
+- `dispatch/mcp/ollama_fastmcp.py`
+- `dispatch/mcp/gemini_fastmcp.py`
+- `dispatch/mcp/codex_fastmcp.py`
+
+Use this Python exactly:
+
+`/Users/valx/cathedral-prime/03-code/active/obsidian-legion/.venv/bin/python3`
+
+Do not use system `python3` for these bridges. The project venv has the `mcp.server.fastmcp` dependency; system Python does not.
+
+## User-Scoped Claude Registration
+
+Register the bridges globally for Claude Code with these exact commands:
+
+```bash
+claude mcp add ollama-bridge -s user -- \
+  /Users/valx/cathedral-prime/03-code/active/obsidian-legion/.venv/bin/python3 \
+  /Users/valx/cathedral-prime/03-code/active/obsidian-legion/dispatch/mcp/ollama_fastmcp.py
+
+claude mcp add gemini-bridge -s user -- \
+  /Users/valx/cathedral-prime/03-code/active/obsidian-legion/.venv/bin/python3 \
+  /Users/valx/cathedral-prime/03-code/active/obsidian-legion/dispatch/mcp/gemini_fastmcp.py
+
+claude mcp add codex-bridge -s user -- \
+  /Users/valx/cathedral-prime/03-code/active/obsidian-legion/.venv/bin/python3 \
+  /Users/valx/cathedral-prime/03-code/active/obsidian-legion/dispatch/mcp/codex_fastmcp.py
 ```
+
+Verify:
+
+```bash
+claude mcp list | grep -E "ollama|gemini|codex"
+```
+
+Expected end state:
+
+- `ollama-bridge` -> Connected
+- `gemini-bridge` -> Connected
+- `codex-bridge` -> Connected
+
+## Directory Layout
+
+```text
 dispatch/
-├── README.md                    # This file
+├── README.md
 ├── mcp/
-│   ├── __init__.py
-│   ├── _shared.py              # Base MCP server (JSON-RPC over stdio)
-│   ├── ollama_bridge.py        # ollama_chat, ollama_compare
-│   ├── codex_bridge.py         # codex_exec, codex_patch
-│   └── gemini_bridge.py        # gemini_prompt, gemini_review_files
+│   ├── ollama_fastmcp.py       # canonical Ollama FastMCP bridge
+│   ├── gemini_fastmcp.py       # canonical Gemini FastMCP bridge
+│   ├── codex_fastmcp.py        # canonical Codex FastMCP bridge
+│   ├── ollama_bridge.py        # legacy custom JSON-RPC bridge
+│   ├── gemini_bridge.py        # legacy custom JSON-RPC bridge
+│   ├── codex_bridge.py         # legacy custom JSON-RPC bridge
+│   └── _shared.py              # legacy base server
 ├── router/
-│   └── dispatch-matrix.yaml    # Routing policy (what goes where)
+│   └── dispatch-matrix.yaml
 └── scripts/
-    ├── common.py               # Shared utils, classify_prompt, worker functions
-    ├── classify_prompt.py      # Shadow hook: classify + log route hint
-    └── dispatch.py             # CLI dispatcher: auto-route or explicit route
+    ├── common.py
+    ├── classify_prompt.py
+    └── dispatch.py
 ```
 
-## Dispatch matrix
+## Legacy Notes
 
-| Route   | Use for                                               | Escalates to |
-|---------|-------------------------------------------------------|--------------|
-| ollama  | summarization, rewriting, wiki normalization, low-risk | gemini       |
+The `_shared.py` bridge family remains in the repo for now to minimize churn, but it is not the preferred Claude MCP setup anymore. If you want the working Claude-facing bridge path, use the FastMCP scripts above.
+
+## Dispatch Matrix
+
+| Route   | Use for                                                | Escalates to |
+|---------|--------------------------------------------------------|--------------|
+| ollama  | summarization, rewriting, wiki normalization, low-risk transforms | gemini |
 | gemini  | repo research, long-context analysis, broad questions  | claude       |
 | codex   | bounded implementation, patches, refactor attempts     | claude       |
-| claude  | architecture, acceptance review, risky/ambiguous work  | --           |
-| n8n     | (phase 2) queued jobs, scheduled jobs, retries         | --           |
+| claude  | architecture, acceptance review, risky or ambiguous work | --         |
+| n8n     | phase 2 queued jobs, scheduled jobs, retries           | --           |
 
-## How to enable
+## Bridge Behavior
 
-### 1. MCP bridges
+### Ollama FastMCP
 
-Add to your `.mcp.json` or Claude Code MCP config:
+- Tool: `ollama_chat`
+- Tool: `ollama_list_models`
+- Transport: stdio
 
-```json
-{
-  "mcpServers": {
-    "ollama-bridge": {
-      "command": "python3",
-      "args": ["dispatch/mcp/ollama_bridge.py"],
-      "cwd": "<repo-root>"
-    },
-    "codex-bridge": {
-      "command": "python3",
-      "args": ["dispatch/mcp/codex_bridge.py"],
-      "cwd": "<repo-root>"
-    },
-    "gemini-bridge": {
-      "command": "python3",
-      "args": ["dispatch/mcp/gemini_bridge.py"],
-      "cwd": "<repo-root>"
-    }
-  }
-}
-```
+### Gemini FastMCP
 
-### 2. Shadow hook (optional)
+- Tool: `gemini_prompt(prompt: str) -> dict`
+- Backend: `gemini -p <prompt>`
+- Timeout: 120 seconds
 
-To log route classification on every user prompt:
+### Codex FastMCP
 
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "type": "command",
-        "command": "python3 dispatch/scripts/classify_prompt.py"
-      }
-    ]
-  }
-}
-```
+- Tool: `codex_exec(prompt: str, timeout_seconds: int = 120) -> dict`
+- Backend: `codex exec`
+- Prompt delivery: stdin
+- Timeout: minimum 120 seconds
 
-### 3. Environment variables
+## Environment Variables
 
-| Variable                      | Default                    | Description                    |
-|-------------------------------|----------------------------|--------------------------------|
-| `OLLAMA_BASE_URL`             | `http://localhost:11434`   | Ollama API base URL            |
-| `OLLAMA_MODEL_DEFAULT`        | `llama3.2:3b`             | Default light model            |
-| `DISPATCH_CONFIDENCE_THRESHOLD` | `0.35`                   | Min confidence to route away from Claude |
-| `DISPATCH_LOG_DIR`            | `dispatch/.logs`           | Where JSONL logs are written   |
-| `DISPATCH_POLICY_PATH`        | `dispatch/router/dispatch-matrix.yaml` | Custom policy file |
-| `GEMINI_CLI_BIN`              | `gemini`                   | Path to Gemini CLI             |
-| `CODEX_CLI_BIN`               | `codex`                    | Path to Codex CLI              |
+| Variable | Default | Description |
+|---|---|---|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API base URL |
+| `OLLAMA_DEFAULT_MODEL` | `llama3.2:3b` | Default Ollama model for FastMCP bridge |
+| `GEMINI_BIN` | `gemini` | Gemini CLI path for FastMCP bridge |
+| `CODEX_BIN` | `codex` | Codex CLI path for FastMCP bridge |
+| `DISPATCH_LOG_DIR` | `dispatch/.logs` | JSONL route logs for the dispatcher |
+| `DISPATCH_POLICY_PATH` | `dispatch/router/dispatch-matrix.yaml` | Custom policy file |
 
-## How to test
+## How to Test
 
-### CLI dispatcher
+### 1. Verify FastMCP import in the project venv
 
 ```bash
-# Auto-route (classifier picks the worker)
-python3 dispatch/scripts/dispatch.py "summarize this document"
-
-# Force a specific route
-python3 dispatch/scripts/dispatch.py --route ollama "rewrite this paragraph"
-
-# Use a heavier Ollama model
-python3 dispatch/scripts/dispatch.py --route ollama --ollama-model qwen3.5:27b "explain this code"
-
-# Route to Gemini for research
-python3 dispatch/scripts/dispatch.py --route gemini "analyze the repo structure"
+/Users/valx/cathedral-prime/03-code/active/obsidian-legion/.venv/bin/python3 -c \
+  "from mcp.server.fastmcp import FastMCP; print('fastmcp ok')"
 ```
 
-### Shadow classifier
+### 2. Smoke-test the CLI assumptions
 
 ```bash
-echo '{"prompt": "summarize this file"}' | python3 dispatch/scripts/classify_prompt.py
+gemini -p "Reply with exactly GEMINI_OK"
+printf 'Reply with exactly CODEX_OK\n' | codex exec
 ```
 
-### Verify existing tests still pass
+### 3. Verify repo tests still pass
 
 ```bash
 cd ~/cathedral-prime/03-code/active/obsidian-legion
@@ -124,15 +141,8 @@ source .venv/bin/activate
 pytest -q
 ```
 
-## Bug fixes applied (vs. research bundle)
-
-1. **Minimum keyword length**: `classify_prompt` now skips single-character keywords to avoid false substring matches.
-2. **Confidence threshold**: Routes below 0.35 confidence fall back to Claude instead of routing to a cheaper worker.
-3. **Summary weights**: `dispatch-matrix.yaml` routes now have explicit `weight` values (were missing).
-4. **Timeout cap**: All subprocess and HTTP timeouts capped at 60 seconds (were 120-1800s in source).
-
-## Infrastructure defaults
+## Infrastructure Defaults
 
 - Ollama URL: `http://localhost:11434`
-- Light model: `llama3.2:3b`
-- Heavy model: `qwen3.5:27b` (pass via `--ollama-model`)
+- Light Ollama model: `llama3.2:3b`
+- Claude remains the orchestrator and acceptance judge
