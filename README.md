@@ -18,7 +18,14 @@
 
 > **One task contract. Every agent. No coordination sludge.**
 
+<img src="./tui-intro.gif" alt="Obsidian Legion Terminal Intro" />
+
+<details>
+<summary>See the wiki compile in action</summary>
+
 <img src="./demo.gif" alt="Obsidian Legion Wiki Compile Demo" />
+
+</details>
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-green.svg)](https://www.python.org/)
