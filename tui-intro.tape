@@ -1,86 +1,55 @@
 # Obsidian Legion — Terminal Intro Animation
-# Aesthetic: Nostromo (Alien) meets HAL 9000 (2001)
+# Clean version: no ASCII art (bash can't handle it), pure Nostromo text
 # Run: vhs tui-intro.tape
 
 Output tui-intro.gif
 
 Set Shell "bash"
-Set FontSize 15
-Set Width 900
-Set Height 500
+Set FontSize 16
+Set Width 800
+Set Height 450
 Set Theme "Catppuccin Mocha"
-Set Padding 20
+Set Padding 30
 Set TypingSpeed 30ms
 
-# --- Scene 1: Cold boot ---
+# --- Cold boot ---
+Sleep 1s
+Type "echo ''"
+Enter
+Type "echo '  OBSIDIAN LEGION v0.2.0'"
+Enter
+Type "echo '  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'"
+Enter
+Type "echo '  One contract. Every agent. Zero sludge.'"
+Enter
+Type "echo ''"
+Enter
+Sleep 1.5s
+
+# --- 3-Layer Architecture ---
+Type "echo '  >>> 3-Layer Memory Architecture'"
+Enter
 Sleep 500ms
 
-Type "INITIALIZING OBSIDIAN LEGION v0.2.0..."
+Type "echo '  Layer 1: Obsidian CLI + Legion ........... [ONLINE]'"
 Enter
-Sleep 1s
+Sleep 400ms
 
-# --- Scene 2: ASCII Banner (line by line) ---
-Type " ██████╗ ██████╗ ███████╗██╗██████╗ ██╗ █████╗ ███╗   ██╗"
+Type "echo '  Layer 2: LLM Wiki (Karpathy pattern) .... [ONLINE]'"
 Enter
-Sleep 100ms
-Type "██╔═══██╗██╔══██╗██╔════╝██║██╔══██╗██║██╔══██╗████╗  ██║"
+Sleep 400ms
+
+Type "echo '  Layer 3: Qdrant Vector Search ............ [ONLINE]'"
 Enter
-Sleep 100ms
-Type "██║   ██║██████╔╝███████╗██║██║  ██║██║███████║██╔██╗ ██║"
-Enter
-Sleep 100ms
-Type "██║   ██║██╔══██╗╚════██║██║██║  ██║██║██╔══██║██║╚██╗██║"
-Enter
-Sleep 100ms
-Type "╚██████╔╝██████╔╝███████║██║██████╔╝██║██║  ██║██║ ╚████║"
-Enter
-Sleep 100ms
-Type " ╚═════╝ ╚═════╝ ╚══════╝╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝"
-Enter
-Sleep 100ms
-Type "        ██╗     ███████╗ ██████╗ ██╗ ██████╗ ███╗   ██╗"
-Enter
-Sleep 100ms
-Type "        ██║     ██╔════╝██╔════╝ ██║██╔═══██╗████╗  ██║"
-Enter
-Sleep 100ms
-Type "        ██║     █████╗  ██║  ███╗██║██║   ██║██╔██╗ ██║"
-Enter
-Sleep 100ms
-Type "        ██║     ██╔══╝  ██║   ██║██║██║   ██║██║╚██╗██║"
-Enter
-Sleep 100ms
-Type "        ███████╗███████╗╚██████╔╝██║╚██████╔╝██║ ╚████║"
-Enter
-Sleep 100ms
-Type "        ╚══════╝╚══════╝ ╚═════╝ ╚═╝ ╚═════╝ ╚═╝  ╚═══╝"
+Sleep 400ms
+
+Type "echo ''"
 Enter
 
-Sleep 1s
-
-# --- Scene 3: Tagline ---
-Type " One contract. Every agent. Zero sludge."
+# --- Status ---
+Sleep 500ms
+Type "echo '  >>> All systems operational.'"
 Enter
-
-Sleep 1s
-
-# --- Scene 4: 3-Layer Architecture ---
-Type ">>> 3-Layer Memory Architecture"
+Type "echo '  >>> Ready for consciousness.'"
 Enter
-Sleep 300ms
-Type "    Layer 1: Obsidian CLI + Legion ........... [ONLINE]"
-Enter
-Sleep 300ms
-Type "    Layer 2: LLM Wiki (Karpathy pattern) .... [ONLINE]"
-Enter
-Sleep 300ms
-Type "    Layer 3: Qdrant Vector Search ............ [ONLINE]"
-Enter
-
-Sleep 1s
-
-# --- Scene 5: Final status ---
-Type ">>> All systems operational. Ready for consciousness."
-Enter
-
-Sleep 2s
+Sleep 2.5s
