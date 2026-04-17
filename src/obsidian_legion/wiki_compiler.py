@@ -172,9 +172,18 @@ class WikiCompiler:
             return self._call_ollama_curl(prompt)
 
         timeout = 600.0 if "cloud" in self.model else 300.0
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+        }
+        # For local models, cap context to 8192 to avoid slow inference
+        # with models loaded at very large context windows (e.g. 131K).
+        if "cloud" not in self.model:
+            payload["options"] = {"num_ctx": 8192}
         response = httpx.post(
             f"{self.ollama_url}/api/generate",
-            json={"model": self.model, "prompt": prompt, "stream": False},
+            json=payload,
             timeout=timeout,
         )
         response.raise_for_status()
