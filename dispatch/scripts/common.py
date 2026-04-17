@@ -464,3 +464,65 @@ def submit_n8n_job(workflow: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             "error": str(exc),
             "elapsed_s": round(now_ts() - started, 3),
         }
+
+
+# --- Failback Chain ---
+
+FAILBACK_ORDER = ["ollama", "codex", "gemini", "claude"]
+
+
+def dispatch_with_failback(prompt: str, cwd: str | None = None) -> dict[str, Any]:
+    """Try each provider in order until one succeeds."""
+    dispatchers = {
+        "ollama": lambda: dispatch_to_ollama(prompt),
+        "codex": lambda: dispatch_to_codex(prompt, cwd=cwd),
+        "gemini": lambda: dispatch_to_gemini(prompt, cwd=cwd),
+        "claude": lambda: {"ok": True, "worker": "claude", "content": "(kept by Claude — no dispatch)"},
+    }
+    errors: list[str] = []
+    for provider in FAILBACK_ORDER:
+        fn = dispatchers.get(provider)
+        if fn is None:
+            continue
+        result = fn()
+        if result.get("ok"):
+            result["failback_tried"] = errors
+            write_jsonl(LOG_DIR / "dispatch_runs.jsonl", {
+                "ts": now_ts(), "prompt_len": len(prompt),
+                "winner": provider, "tried": errors,
+            })
+            return result
+        errors.append(f"{provider}: {result.get('error', 'unknown')}")
+    return {"ok": False, "worker": "none", "errors": errors, "content": ""}
+
+
+# --- PING/PONG Test ---
+
+
+def ping_all_providers() -> dict[str, Any]:
+    """Test all dispatch targets with a simple hello prompt."""
+    test_prompt = "Say hello in exactly one sentence."
+    results: dict[str, Any] = {}
+
+    # Ollama
+    try:
+        r = dispatch_to_ollama(test_prompt)
+        results["ollama"] = {"ok": r["ok"], "response": r.get("content", "")[:100], "elapsed": r.get("elapsed_s")}
+    except Exception as e:
+        results["ollama"] = {"ok": False, "error": str(e)}
+
+    # Codex
+    try:
+        r = dispatch_to_codex(test_prompt)
+        results["codex"] = {"ok": r["ok"], "response": r.get("content", "")[:100]}
+    except Exception as e:
+        results["codex"] = {"ok": False, "error": str(e)}
+
+    # Gemini
+    try:
+        r = dispatch_to_gemini(test_prompt)
+        results["gemini"] = {"ok": r["ok"], "response": r.get("content", "")[:100]}
+    except Exception as e:
+        results["gemini"] = {"ok": False, "error": str(e)}
+
+    return results
