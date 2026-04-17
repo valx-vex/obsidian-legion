@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "ollama-bridge": {
+      "command": "python3",
+      "args": ["dispatch/mcp/ollama_bridge.py"],
+      "env": {
+        "OLLAMA_BASE_URL": "http://localhost:11434"
+      }
+    },
+    "codex-bridge": {
+      "command": "python3",
+      "args": ["dispatch/mcp/codex_bridge.py"],
+      "env": {
+        "CODEX_BIN": "/opt/homebrew/bin/codex"
+      }
+    },
+    "gemini-bridge": {
+      "command": "python3",
+      "args": ["dispatch/mcp/gemini_bridge.py"],
+      "env": {
+        "GEMINI_BIN": "/opt/homebrew/bin/gemini"
+      }
+    }
+  }
+}

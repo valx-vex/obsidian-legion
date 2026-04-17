@@ -1,0 +1,9 @@
+{
+  "event": "UserPromptSubmit",
+  "prompt_excerpt": "a",
+  "route_hint": "ollama",
+  "task_type": "summary",
+  "complexity_score": 0.5,
+  "policy_path": "/Users/valx/cathedral-prime/03-code/active/obsidian-legion/dispatch/router/dispatch-matrix.yaml",
+  "signals": []
+}

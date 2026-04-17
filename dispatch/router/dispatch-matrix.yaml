@@ -1,0 +1,46 @@
+version: 1
+mode: review_only
+pilot_phase: explicit_mcp_plus_shadow_hooks
+routes:
+  ollama:
+    pilot_enabled: true
+    weight: 0.3
+    use_for:
+      - summarization
+      - rewriting
+      - wiki_normalization
+      - low_risk_transforms
+    escalate_to: gemini
+  gemini:
+    pilot_enabled: true
+    weight: 0.25
+    use_for:
+      - repo_research
+      - long_context_analysis
+      - broad_document_questions
+    escalate_to: claude
+  codex:
+    pilot_enabled: true
+    weight: 0.25
+    use_for:
+      - bounded_implementation
+      - patch_generation
+      - refactor_attempts
+    escalate_to: claude
+  claude:
+    pilot_enabled: true
+    weight: 0.2
+    use_for:
+      - architecture
+      - acceptance_review
+      - risky_refactors
+      - ambiguous_debugging
+  n8n:
+    pilot_enabled: false
+    weight: 0.0
+    phase: 2
+    use_for:
+      - queued_jobs
+      - scheduled_jobs
+      - retries
+      - approval_flows
