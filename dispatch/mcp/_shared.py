@@ -15,9 +15,8 @@ class MCPServer:
 
     def _send(self, message: Dict[str, Any]) -> None:
         body = json.dumps(message, ensure_ascii=False).encode("utf-8")
-        sys.stdout.write(f"Content-Length: {len(body)}\r\n\r\n")
-        sys.stdout.flush()
-        sys.stdout.buffer.write(body)
+        header = f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8")
+        sys.stdout.buffer.write(header + body)
         sys.stdout.buffer.flush()
 
     def _read_message(self) -> Dict[str, Any] | None:
