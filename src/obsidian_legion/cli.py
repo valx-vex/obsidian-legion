@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     wiki_get.add_argument("article_id", help="Article ID (slug).")
 
     for p in [wiki_ingest, wiki_compile, wiki_search, wiki_list, wiki_get, wiki_export]:
-        p.add_argument("--provider", choices=["ollama", "claude"], help="LLM provider override.")
+        p.add_argument("--provider", choices=["ollama", "claude", "gemini"], help="LLM provider override.")
         p.add_argument("--model", help="LLM model override.")
 
     return parser

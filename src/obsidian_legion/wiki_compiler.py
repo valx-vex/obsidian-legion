@@ -163,6 +163,8 @@ class WikiCompiler:
             return self._call_ollama(prompt)
         if self.provider == "claude":
             return self._call_claude(prompt)
+        if self.provider == "gemini":
+            return self._call_gemini(prompt)
         raise ValueError(f"Unknown provider: {self.provider}")
 
     def _call_ollama(self, prompt: str) -> str:
@@ -208,6 +210,29 @@ class WikiCompiler:
         if result.returncode != 0:
             raise RuntimeError(f"Ollama call failed: {result.stderr}")
         return json.loads(result.stdout).get("response", "")
+
+    def _call_gemini(self, prompt: str) -> str:
+        import os
+
+        gemini_bin = os.environ.get("GEMINI_BIN", "gemini")
+        try:
+            result = subprocess.run(
+                [gemini_bin, "-p", prompt],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"[wiki_compiler] Gemini call timed out after 120s", file=__import__("sys").stderr)
+            return ""
+        except Exception as exc:
+            print(f"[wiki_compiler] Gemini call failed: {exc}", file=__import__("sys").stderr)
+            return ""
+        if result.returncode != 0:
+            print(f"[wiki_compiler] Gemini exited {result.returncode}: {result.stderr.strip()}", file=__import__("sys").stderr)
+            return ""
+        return result.stdout
 
     def _call_claude(self, prompt: str) -> str:
         import os
