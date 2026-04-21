@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import textwrap
 from pathlib import Path
 
@@ -13,8 +12,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from standardize_frontmatter import (
     CANONICAL_FIELDS,
-    FrontmatterResult,
-    build_defaults,
     infer_area,
     infer_project,
     infer_type,

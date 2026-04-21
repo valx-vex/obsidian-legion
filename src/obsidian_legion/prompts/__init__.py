@@ -10,7 +10,6 @@ abundant JSON examples inside each template do not conflict with Python's
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
 
 _PROMPTS_DIR = Path(__file__).parent
 _DEFAULT_TYPE = "topic"

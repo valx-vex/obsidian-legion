@@ -9,7 +9,6 @@ from obsidian_legion.graphify import (
     is_available,
     build_graph,
     query_graph,
-    GraphResult,
 )
 
 

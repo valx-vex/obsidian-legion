@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """PING all dispatch targets — test that each provider responds."""
 
-import json
 import sys
 from pathlib import Path
 

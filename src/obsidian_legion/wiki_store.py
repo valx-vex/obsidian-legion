@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import LegionPaths
-from .wiki_compiler import CompilationResult, WikiCompiler
+from .wiki_compiler import WikiCompiler
 from .wiki_models import (
     WikiArticle,
     WikiManifest,

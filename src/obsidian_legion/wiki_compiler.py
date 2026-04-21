@@ -224,7 +224,7 @@ class WikiCompiler:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            print(f"[wiki_compiler] Gemini call timed out after 120s", file=__import__("sys").stderr)
+            print("[wiki_compiler] Gemini call timed out after 120s", file=__import__("sys").stderr)
             return ""
         except Exception as exc:
             print(f"[wiki_compiler] Gemini call failed: {exc}", file=__import__("sys").stderr)
