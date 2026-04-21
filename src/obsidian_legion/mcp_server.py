@@ -144,6 +144,43 @@ def build_mcp(paths: LegionPaths):
         atype = article_type if article_type else None
         return [a.to_dict() for a in wiki.list_articles(article_type=atype)]
 
+    # --- Layer 0: Graphify tools ---
+
+    @mcp.tool()
+    def graphify_build(mode: str = "deep", update: bool = True) -> dict:
+        """Layer 0: Build knowledge graph from vault using Graphify.
+
+        Requires graphifyy package (pip install graphifyy).
+        Turns code, docs, images, videos into a queryable knowledge graph.
+        """
+        from .graphify import is_available, build_graph
+
+        if not is_available():
+            return {"error": "Graphify not installed. Run: pip install graphifyy"}
+        result = build_graph(paths.vault_root, mode=mode, update=update)
+        if result.error and not result.success:
+            return {"error": result.error}
+        return {
+            "nodes": result.node_count,
+            "edges": result.edge_count,
+            "communities": result.community_count,
+            "output": str(result.output_dir),
+            "success": result.success,
+        }
+
+    @mcp.tool()
+    def graphify_query(question: str) -> dict:
+        """Query the knowledge graph built by Graphify.
+
+        First run graphify_build to create the graph, then query it.
+        """
+        from .graphify import is_available, query_graph
+
+        if not is_available():
+            return {"error": "Graphify not installed. Run: pip install graphifyy"}
+        answer = query_graph(question, paths.vault_root)
+        return {"answer": answer}
+
     return mcp
 
 

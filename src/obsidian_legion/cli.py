@@ -119,6 +119,22 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--provider", choices=["ollama", "claude", "gemini"], help="LLM provider override.")
         p.add_argument("--model", help="LLM model override.")
 
+    # --- Layer 0: Graphify ---
+    graphify_p = subparsers.add_parser(
+        "graphify",
+        help="Layer 0: Build knowledge graph from vault (requires graphifyy package).",
+    )
+    graphify_p.add_argument("path", nargs="?", help="Path to scan (default: vault root)")
+    graphify_p.add_argument(
+        "--mode", choices=["deep", "fast"], default="deep", help="Extraction depth"
+    )
+    graphify_p.add_argument(
+        "--update", action="store_true", help="Only process new/changed files"
+    )
+    graphify_p.add_argument(
+        "--query", type=str, help="Query the built graph instead of building"
+    )
+
     return parser
 
 
@@ -241,6 +257,28 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "wiki":
         return _handle_wiki(args, store)
+
+    if args.command == "graphify":
+        from .graphify import is_available, build_graph, query_graph
+
+        if not is_available():
+            print("Graphify not installed. Install with: pip install graphifyy")
+            return 1
+        vault_root = store.paths.vault_root
+        if args.query:
+            answer = query_graph(args.query, vault_root)
+            print(answer)
+        else:
+            scan_path = Path(args.path) if args.path else None
+            result = build_graph(vault_root, mode=args.mode, update=args.update, path=scan_path)
+            if result.error and not result.success:
+                print(f"Error: {result.error}")
+                return 1
+            print(f"Graph built: {result.node_count} nodes, {result.edge_count} edges, {result.community_count} communities")
+            print(f"Output: {result.output_dir}")
+            if result.error:
+                print(f"Note: {result.error}")
+        return 0
 
     parser.error(f"Unsupported command: {args.command}")
     return 2

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "obsidian-legion"
-version = "0.2.0"
+version = "0.3.0"
 description = "Vault-native task engine + LLM Wiki compiler for the VALX Obsidian legion."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,10 +22,14 @@ mcp = [
 wiki = [
   "httpx>=0.27",
 ]
+graph = [
+  "graphifyy>=1.0",
+]
 all = [
   "mcp>=1.12,<2",
   "httpx>=0.27",
   "qdrant-client>=1.9",
+  "graphifyy>=1.0",
 ]
 
 [project.scripts]

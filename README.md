@@ -29,10 +29,10 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-green.svg)](https://www.python.org/)
-![Version](https://img.shields.io/badge/version-0.2.0-blue)
+![Version](https://img.shields.io/badge/version-0.3.0-blue)
 ![Tests](https://img.shields.io/badge/tests-18%2F18-brightgreen)
 ![Pattern](https://img.shields.io/badge/pattern-Karpathy%20LLM%20Wiki-orange)
-![Layers](https://img.shields.io/badge/memory-3--layer%20architecture-purple)
+![Layers](https://img.shields.io/badge/memory-5--layer%20architecture-purple)
 
 ## 10-Second Summary
 
@@ -41,44 +41,44 @@
 **Install**: Give [`INSTALL_ME.md`](INSTALL_ME.md) to your LLM and let it set you up.
 **Agents**: Claude, Codex, Gemini, Ollama -- same verbs, same files, zero sludge.
 
-## What's New in v0.2.0
+## What's New in v0.3.0
 
-| Feature | v0.1.0 | v0.2.0 |
+| Feature | v0.2.0 | v0.3.0 |
 |---------|--------|--------|
 | **Task engine** | Shared Markdown tasks | Shared Markdown tasks |
 | **Multi-agent coordination** | CLI + MCP | CLI + MCP |
-| **LLM Wiki compiler** | -- | Karpathy pattern: compile, don't retrieve |
-| **3-layer memory** | -- | Obsidian CLI / LLM Wiki / Qdrant fallback |
-| **Vault-wide scan** | -- | `--vault-wide` compiles entire vault |
-| **Model tiers** | -- | Heavy (cloud) / Light (local) |
-| **Deep search** | -- | `--deep` falls back to Qdrant vectors |
-| **Prompt pack** | -- | Entity, concept, event, source templates |
-| **Chat ingestion** | -- | Convert conversations to wiki articles |
-| **Qdrant sync** | -- | Weekly vault-to-vector synchronization |
-| **LLM-assisted install** | -- | Give INSTALL_ME.md to any coding LLM |
-| **MCP tools** | 6 tools | 8 tools |
-| **Tests** | 3 | 18 |
+| **LLM Wiki compiler** | Karpathy pattern: compile, don't retrieve | Karpathy pattern: compile, don't retrieve |
+| **5-layer memory** | 3-layer (CLI / Wiki / Qdrant) | 5-layer (Graphify / CLI / Wiki / Qdrant / MCP) |
+| **Graphify integration** | -- | Layer 0: knowledge graph from code/docs/media |
+| **Vault-wide scan** | `--vault-wide` compiles entire vault | `--vault-wide` compiles entire vault |
+| **Model tiers** | Heavy (cloud) / Light (local) | Heavy (cloud) / Light (local) |
+| **Deep search** | `--deep` falls back to Qdrant vectors | `--deep` falls back to Qdrant vectors |
+| **MCP tools** | 8 tools | 10 tools (+ graphify_build, graphify_query) |
+| **Tests** | 18 | 22 |
 
-## Architecture: 3-Layer Memory
+## Architecture: 5-Layer Memory
 
 ```
                     Query arrives
+                         |
+              Layer 0: Graphify (optional)
+              (knowledge graph from code, docs, media)
+              71.5x fewer tokens. AST + semantic.
+              pip install graphifyy
                          |
                     Layer 1: Obsidian CLI + Legion
                     (direct vault read, task coordination)
                     Fastest. Free. No model needed.
                          |
-                    not enough?
-                         |
                     Layer 2: LLM Wiki (Karpathy pattern)
                     (compiled articles, wikilinks, searchable index)
                     The LLM read it once and WROTE the wiki.
                          |
-                    not found?
-                         |
                     Layer 3: Qdrant Vector Search
                     (semantic similarity across entire vault)
-                    Fallback for everything else.
+                         |
+                    Layer 4: MCP Server
+                    (Claude Code, Codex, Gemini, Ollama talk to it)
 ```
 
 The key insight from [Andrej Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):
