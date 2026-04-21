@@ -32,6 +32,12 @@ all = [
   "graphifyy>=1.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/valx-vex/obsidian-legion"
+Repository = "https://github.com/valx-vex/obsidian-legion"
+Issues = "https://github.com/valx-vex/obsidian-legion/issues"
+Changelog = "https://github.com/valx-vex/obsidian-legion/releases"
+
 [project.scripts]
 obsidian-legion = "obsidian_legion.cli:main"
 obsidian-legion-mcp = "obsidian_legion.mcp_server:main"

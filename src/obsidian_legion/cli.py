@@ -18,6 +18,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("bootstrap", help="Create required task-system directories and state files.")
 
+    subparsers.add_parser(
+        "init",
+        help="Set up Obsidian Legion in your vault. Auto-detects vault, creates task structure, shows next steps.",
+    )
+
     capture = subparsers.add_parser("capture", help="Create a canonical task note.")
     capture.add_argument("title")
     capture.add_argument("--summary", required=True)
@@ -152,6 +157,56 @@ def main(argv: list[str] | None = None) -> int:
                 print(path)
         else:
             print("Layout already present.")
+        return 0
+
+    if args.command == "init":
+        print()
+        print("  Obsidian Legion -- Setup Wizard")
+        print()
+        vault = store.paths.vault_root
+        print(f"  Vault: {vault}")
+        print()
+        print("  Setting up task system...")
+        created = store.bootstrap()
+        if created:
+            for p in created:
+                print(f"    + {p}")
+        else:
+            print("    Task system already set up.")
+        print()
+        print("  Checking optional features...")
+        try:
+            import httpx  # noqa: F401
+            print("    [ok] Wiki compiler (httpx)")
+        except ImportError:
+            print("    [ ] Wiki compiler: pip install obsidian-legion[wiki]")
+        try:
+            import mcp  # noqa: F401
+            print("    [ok] MCP server")
+        except ImportError:
+            print("    [ ] MCP server: pip install obsidian-legion[mcp]")
+        from .graphify import is_available as _graphify_ok
+        if _graphify_ok():
+            print("    [ok] Graphify (Layer 0)")
+        else:
+            print("    [ ] Graphify: pip install graphifyy")
+        try:
+            import qdrant_client  # noqa: F401
+            print("    [ok] Qdrant (Layer 3)")
+        except ImportError:
+            print("    [ ] Qdrant: pip install obsidian-legion[all]")
+        print()
+        print("  Ready. Try:")
+        print()
+        print("    obsidian-legion capture 'My first task' --summary 'Get started'")
+        print("    obsidian-legion next")
+        print("    obsidian-legion wiki compile")
+        print("    obsidian-legion graphify --update")
+        print()
+        print("  Docs: https://github.com/valx-vex/obsidian-legion")
+        print()
+        print("  One contract. Every agent. Zero sludge.")
+        print()
         return 0
 
     if args.command == "capture":
