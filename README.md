@@ -189,7 +189,7 @@ the current directory looking for the vault.
 | `update` | Patch any field: status, priority, assignee, lane, tags, blockers, and `--log-note` for history. |
 | `done` | Mark a task completed. Optionally add a `--note`. |
 | `refresh` | Rebuild all dashboards and rollups from canonical task data. |
-| `doctor` | Print a JSON health report: detected paths, task counts, and anomalies. |
+| `doctor` | Run health checks for vault structure, optional dependencies, and MCP readiness. Defaults to a human report; add `--format json` for automation. |
 
 Most mutating verbs accept `--refresh` to regenerate dashboards automatically.
 
@@ -252,6 +252,12 @@ cd obsidian-legion
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[all]"
 ollama pull llama3.2:3b
+```
+
+If you only want the polished terminal UI without the full optional stack:
+
+```bash
+pip install -e ".[tui]"
 ```
 
 ### Prerequisites
@@ -424,7 +430,9 @@ cd <VAULT_ROOT>/03-code/active/obsidian-legion
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[all]"
 pytest
+ruff check .
 obsidian-legion doctor --vault-root <VAULT_ROOT>
+obsidian-legion doctor --format json --vault-root <VAULT_ROOT>
 ```
 
 ## License
