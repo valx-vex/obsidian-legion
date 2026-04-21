@@ -258,26 +258,119 @@ class TaskStore:
         return generated
 
     def doctor(self) -> dict[str, Any]:
+        tasks = self.load_tasks()
+        bootstrap_fix = f"Run: obsidian-legion bootstrap --vault-root {self.paths.vault_root}"
+        checks: list[dict[str, str | None]] = []
+
+        def add_check(
+            code: str,
+            name: str,
+            status: str,
+            detail: str,
+            fix: str | None = None,
+        ) -> None:
+            checks.append(
+                {
+                    "code": code,
+                    "name": name,
+                    "status": status,
+                    "detail": detail,
+                    "fix": fix,
+                }
+            )
+
+        add_check("vault_root", "Vault root", "ok", str(self.paths.vault_root))
+
+        for code, name, path, missing_status, missing_fix in [
+            ("action_points_root", "Action points root", self.paths.action_points_root, "ok", None),
+            ("tasks_root", "Tasks root", self.paths.tasks_root, "ok", None),
+            ("dashboards_root", "Dashboards root", self.paths.dashboards_root, "ok", None),
+            ("config_root", "Config root", self.paths.config_root, "ok", None),
+            ("state_root", "State root", self.paths.state_root, "ok", None),
+            ("counter_file", "Counter file", self.paths.counter_file, "ok", None),
+            (
+                "agents_file",
+                "Agents file",
+                self.paths.agents_file,
+                "warn",
+                "Create when you want a canonical agent registry under config/agents.yaml.",
+            ),
+        ]:
+            if path.exists():
+                add_check(code, name, "ok", str(path))
+            else:
+                status = "error" if missing_status == "ok" else missing_status
+                fix = bootstrap_fix if missing_fix is None else missing_fix
+                add_check(code, name, status, f"Missing: {path}", fix)
+
+        for code, name, available, fix in [
+            ("rich", "Rich TUI", _module_available("rich"), "Install with: pip install obsidian-legion[tui]"),
+            ("httpx", "Wiki compiler dependency", _module_available("httpx"), "Install with: pip install obsidian-legion[wiki]"),
+            ("mcp", "MCP dependency", _module_available("mcp"), "Install with: pip install obsidian-legion[mcp]"),
+            ("qdrant", "Qdrant client", _module_available("qdrant_client"), "Install with: pip install obsidian-legion[all]"),
+            ("graphify", "Graphify CLI", shutil.which("graphify") is not None, "Install with: pip install graphifyy"),
+        ]:
+            if available:
+                add_check(code, name, "ok", "Available.")
+            else:
+                add_check(code, name, "warn", "Not installed.", fix)
+
         obsidian_bin = shutil.which("obsidian")
-        daily_path = None
         if obsidian_bin:
-            try:
-                result = subprocess.run(
-                    [obsidian_bin, "daily:path"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
+            add_check("obsidian_cli", "Obsidian CLI", "ok", obsidian_bin)
+            daily_path = _probe_obsidian_daily_path(obsidian_bin)
+            if daily_path:
+                add_check("obsidian_daily", "Obsidian daily:path", "ok", daily_path)
+            else:
+                add_check(
+                    "obsidian_daily",
+                    "Obsidian daily:path",
+                    "warn",
+                    "Command returned no path.",
+                    "Open or configure the Obsidian CLI if you rely on daily:path.",
                 )
-                daily_path = result.stdout.strip() or None
-            except subprocess.CalledProcessError:
-                daily_path = None
+        else:
+            add_check(
+                "obsidian_cli",
+                "Obsidian CLI",
+                "warn",
+                "obsidian command not found.",
+                "Install Obsidian CLI or continue without it.",
+            )
+
+        mcp_smoke = _run_mcp_smoke_test(self.paths)
+        add_check(
+            mcp_smoke["code"],
+            mcp_smoke["name"],
+            mcp_smoke["status"],
+            mcp_smoke["detail"],
+            mcp_smoke.get("fix"),
+        )
+
+        summary = {
+            "ok": sum(1 for check in checks if check["status"] == "ok"),
+            "warn": sum(1 for check in checks if check["status"] == "warn"),
+            "error": sum(1 for check in checks if check["status"] == "error"),
+            "task_count": len(tasks),
+            "open_tasks": sum(1 for task in tasks if task.is_open),
+        }
+        overall_status = "error" if summary["error"] else "warn" if summary["warn"] else "ok"
+
         return {
-            "vault_root": str(self.paths.vault_root),
-            "action_points_root": str(self.paths.action_points_root),
-            "obsidian_cli": obsidian_bin or "missing",
-            "daily_path": daily_path,
-            "agents_file": str(self.paths.agents_file),
-            "tasks_root": str(self.paths.tasks_root),
+            "status": overall_status,
+            "summary": summary,
+            "paths": {
+                "vault_root": str(self.paths.vault_root),
+                "action_points_root": str(self.paths.action_points_root),
+                "tasks_root": str(self.paths.tasks_root),
+                "dashboards_root": str(self.paths.dashboards_root),
+                "config_root": str(self.paths.config_root),
+                "state_root": str(self.paths.state_root),
+                "counter_file": str(self.paths.counter_file),
+                "agents_file": str(self.paths.agents_file),
+                "obsidian_cli": obsidian_bin,
+            },
+            "checks": checks,
         }
 
     def write_task(self, task: Task) -> None:
@@ -603,6 +696,67 @@ class TaskStore:
             handle.write(content)
             temp_name = handle.name
         os.replace(temp_name, path)
+
+
+def _probe_obsidian_daily_path(obsidian_bin: str) -> str | None:
+    try:
+        result = subprocess.run(
+            [obsidian_bin, "daily:path"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    return result.stdout.strip() or None
+
+
+def _module_available(module_name: str) -> bool:
+    try:
+        __import__(module_name)
+    except ImportError:
+        return False
+    return True
+
+
+def _run_mcp_smoke_test(paths: LegionPaths) -> dict[str, str | None]:
+    try:
+        from .mcp_server import build_mcp
+    except ImportError:
+        return {
+            "code": "mcp_smoke",
+            "name": "MCP smoke test",
+            "status": "warn",
+            "detail": "MCP dependency is not installed.",
+            "fix": "Install with: pip install obsidian-legion[mcp]",
+        }
+
+    try:
+        build_mcp(paths)
+    except SystemExit as exc:
+        return {
+            "code": "mcp_smoke",
+            "name": "MCP smoke test",
+            "status": "warn",
+            "detail": str(exc) or "MCP dependency is not installed.",
+            "fix": "Install with: pip install obsidian-legion[mcp]",
+        }
+    except Exception as exc:  # pragma: no cover - defensive surface for unexpected MCP failures
+        return {
+            "code": "mcp_smoke",
+            "name": "MCP smoke test",
+            "status": "error",
+            "detail": f"Failed to build MCP server: {exc}",
+            "fix": "Inspect obsidian-legion.mcp_server for import or wiring errors.",
+        }
+
+    return {
+        "code": "mcp_smoke",
+        "name": "MCP smoke test",
+        "status": "ok",
+        "detail": "MCP server imports and builds successfully.",
+        "fix": None,
+    }
 
 
 def _advance_counter(state: dict[str, Any], now: datetime) -> dict[str, Any]:
