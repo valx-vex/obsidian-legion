@@ -8,6 +8,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
 from obsidian_legion.vaultgraph.embedder import (
+    BATCH_SIZE,
     COLLECTION,
     VECTOR_SIZE,
     VaultEmbedder,
@@ -83,6 +84,25 @@ def test_upsert_notes_payload_and_idempotent() -> None:
     assert payload["sha256"] == "deadbeef"
     emb.upsert_notes([note])  # same relpath → same deterministic id
     assert client.count(collection_name=COLLECTION).count == 1
+
+
+def test_upsert_notes_batches_large_input(monkeypatch) -> None:
+    # 24k-note vault sent in one upsert exceeded Qdrant's 32MB payload limit;
+    # upsert_notes must flush in BATCH_SIZE chunks. 600 notes → ≥3 calls.
+    emb, client = make_embedder({"T": unit((0, 1.0))})
+    calls: list[int] = []
+    real_upsert = client.upsert
+
+    def spy(**kwargs):
+        calls.append(len(kwargs["points"]))
+        return real_upsert(**kwargs)
+
+    monkeypatch.setattr(client, "upsert", spy)
+    notes = [_note(f"n{i}.md", "T") for i in range(600)]
+    assert emb.upsert_notes(notes) == 600
+    assert len(calls) >= 3
+    assert all(c <= BATCH_SIZE for c in calls)
+    assert client.count(collection_name=COLLECTION).count == 600
 
 
 def test_knn_edges_thresholds() -> None:

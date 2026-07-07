@@ -17,6 +17,12 @@ COLLECTION = "vault_eternal"
 VECTOR_SIZE = 384
 MODEL_NAME = "all-MiniLM-L6-v2"
 
+# Qdrant rejects any single request whose JSON payload exceeds 32MB. A full 24k
+# vault in one upsert was ~200MB (each point: 384 floats + ~1.5KB payload).
+# 256 points/request keeps us well under the limit; reused for the id-only
+# mark_absent/delete calls too (trivially small, batched only for symmetry).
+BATCH_SIZE = 256
+
 
 def point_id(relpath: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, "vaultgraph:" + relpath))
@@ -83,41 +89,49 @@ class VaultEmbedder:
         notes = [n for n in (notes or []) if n.get("relpath")]
         if not notes:
             return 0
-        vectors = self._embed([n.get("text", "") for n in notes])
         client = self._get_client()
-        points = []
-        for note, vector in zip(notes, vectors):
-            relpath = note["relpath"]
-            payload = {
-                "path": relpath,
-                "title": note.get("title", ""),
-                "tags": list(note.get("tags") or []),
-                "folder": note.get("folder", ""),
-                "mtime": note.get("mtime"),
-                "sha256": note.get("sha256"),
-            }
-            points.append(PointStruct(id=point_id(relpath),
-                                      vector=list(vector), payload=payload))
-        client.upsert(collection_name=self.collection, points=points)
-        return len(points)
+        total = 0
+        for start in range(0, len(notes), BATCH_SIZE):
+            chunk = notes[start:start + BATCH_SIZE]
+            vectors = self._embed([n.get("text", "") for n in chunk])
+            points = []
+            for note, vector in zip(chunk, vectors):
+                relpath = note["relpath"]
+                payload = {
+                    "path": relpath,
+                    "title": note.get("title", ""),
+                    "tags": list(note.get("tags") or []),
+                    "folder": note.get("folder", ""),
+                    "mtime": note.get("mtime"),
+                    "sha256": note.get("sha256"),
+                }
+                points.append(PointStruct(id=point_id(relpath),
+                                          vector=list(vector), payload=payload))
+            client.upsert(collection_name=self.collection, points=points)
+            total += len(points)
+        return total
 
     def mark_absent(self, relpaths: list[str], ts: float) -> None:
         if not relpaths:
             return
         client = self._get_client()
-        client.set_payload(
-            collection_name=self.collection,
-            payload={"absent_since": float(ts)},
-            points=[point_id(rp) for rp in relpaths])
+        ids = [point_id(rp) for rp in relpaths]
+        for start in range(0, len(ids), BATCH_SIZE):
+            client.set_payload(
+                collection_name=self.collection,
+                payload={"absent_since": float(ts)},
+                points=ids[start:start + BATCH_SIZE])
 
     def delete_points(self, relpaths: list[str]) -> None:
         if not relpaths:
             return
         from qdrant_client.models import PointIdsList
         client = self._get_client()
-        client.delete(
-            collection_name=self.collection,
-            points_selector=PointIdsList(points=[point_id(rp) for rp in relpaths]))
+        ids = [point_id(rp) for rp in relpaths]
+        for start in range(0, len(ids), BATCH_SIZE):
+            client.delete(
+                collection_name=self.collection,
+                points_selector=PointIdsList(points=ids[start:start + BATCH_SIZE]))
 
     def knn_edges(self, k: int = 8, related_min: float = 0.60,
                   near_dup_min: float = 0.92) -> list[dict]:
