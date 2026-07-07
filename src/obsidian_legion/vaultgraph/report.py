@@ -15,6 +15,8 @@ REPORT_DIR = Path.home() / ".vex" / "logs" / "legion"
 def _render_graph(graph_report: dict) -> list[str]:
     if graph_report.get("error"):
         return [f"- graph: FAILED — {graph_report['error']}"]
+    if "skipped" in graph_report:
+        return [f"- graph: skipped ({graph_report['skipped']})"]
     keys = ["notes_seen", "changed", "absent_marked", "purged", "embedded",
             "semantic_edges", "communities", "duration_s"]
     parts = [f"{key}={graph_report.get(key)}" for key in keys

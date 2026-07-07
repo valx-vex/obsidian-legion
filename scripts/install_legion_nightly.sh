@@ -30,6 +30,7 @@ fi
 
 [ -x "$PYTHON" ] || { echo "python not found/executable: $PYTHON" >&2; exit 1; }
 mkdir -p "$LOG_DIR"
+[ -f "$DEST" ] && cp "$DEST" "$DEST.bak.$(date +%s)"
 cp "$TMP" "$DEST"
 
 UID_NUM="$(id -u)"

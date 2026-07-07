@@ -66,6 +66,14 @@ def test_graph_error_is_surfaced(monkeypatch, tmp_path):
     assert "qdrant refused" in path.read_text().lower()
 
 
+def test_graph_skipped_renders_reason(monkeypatch, tmp_path):
+    monkeypatch.setattr(report, "REPORT_DIR", tmp_path / "legion")
+    path = report.write_report("exegesis", {"skipped": "no changes since last run"},
+                               None, when=datetime(2026, 7, 8))
+    text = path.read_text().lower()
+    assert "graph: skipped" in text and "no changes since last run" in text
+
+
 def test_when_defaults_to_now(monkeypatch, tmp_path):
     monkeypatch.setattr(report, "REPORT_DIR", tmp_path / "legion")
     path = report.write_report("exegesis", _graph(), _wiki())
