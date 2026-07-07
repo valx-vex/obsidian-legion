@@ -161,3 +161,22 @@ def test_skip_embeddings_builds_structure_only(tmp_path):
     assert report["embedded"] == 0
     assert emb.upserted == []
     assert (vault / ".legion" / "graph.sqlite").exists()
+
+
+def test_semantic_edges_get_kind_and_persist(tmp_path):
+    # knn_edges yields {src, dst, weight, annotation} with NO kind — the builder
+    # must stamp kind="semantic" or GraphDB.rebuild crashes on edges.kind NOT NULL.
+    vault = make_vault(tmp_path)
+    write(vault, "a.md", "# A\n")
+    write(vault, "b.md", "# B\n")
+    emb = FakeEmbedder()
+    emb.knn = [{"src": "a.md", "dst": "b.md", "weight": 0.7, "annotation": "related_to"}]
+    report = GraphBuilder(vault, embedder=emb).update(full=True)  # embeddings ON, must not raise
+    assert report["qdrant_ok"] is True
+    assert report["semantic_edges"] == 1
+    db = GraphDB(vault / ".legion" / "graph.sqlite")
+    result = db.neighbors("a.md", depth=1)
+    semantic = [e for e in result["edges"] if e["kind"] == "semantic"]
+    assert len(semantic) == 1
+    assert semantic[0]["annotation"] == "related_to"
+    assert {semantic[0]["src"], semantic[0]["dst"]} == {"a.md", "b.md"}

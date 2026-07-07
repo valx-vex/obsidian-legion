@@ -183,7 +183,7 @@ class GraphBuilder:
                     semantic_edges = []
 
             valid_ids = set(nodes_map)
-            semantic_edges = [e for e in semantic_edges
+            semantic_edges = [{**e, "kind": "semantic"} for e in semantic_edges
                               if e.get("src") in valid_ids and e.get("dst") in valid_ids]
             edges.extend(semantic_edges)
 
