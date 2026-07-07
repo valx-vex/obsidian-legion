@@ -68,17 +68,19 @@ class ProviderChain:
             if name in self.dead_providers:
                 continue
             returncode, stdout, stderr = self._invoke(provider, prompt)
+            # Success = exit 0 with non-empty stdout. stderr is irrelevant then;
+            # quota classification applies ONLY to invocations that already failed.
+            if returncode == 0 and (stdout or "").strip():
+                return MissionResult(text=stdout, provider=name, ok=True,
+                                     quota_exhausted=saw_quota, error="")
             stderr_lower = (stderr or "").lower()
             if any(pattern in stderr_lower for pattern in QUOTA_PATTERNS):
                 self.dead_providers.add(name)
                 saw_quota = True
                 last_error = f"{name}: quota/rate-limit ({(stderr or '').strip()[:200]})"
                 continue
-            if returncode != 0 or not (stdout or "").strip():
-                last_error = f"{name}: exit={returncode}, empty={not (stdout or '').strip()}"
-                continue
-            return MissionResult(text=stdout, provider=name, ok=True,
-                                 quota_exhausted=saw_quota, error="")
+            last_error = f"{name}: exit={returncode}, empty={not (stdout or '').strip()}"
+            continue
         return MissionResult(text="", provider="", ok=False,
                              quota_exhausted=saw_quota, error=last_error)
 

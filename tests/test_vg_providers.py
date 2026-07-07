@@ -104,6 +104,21 @@ def test_quota_marks_provider_dead_for_rest_of_run():
     assert len(aa_calls) == 1                              # never retried after quota
 
 
+def test_quota_noise_on_success_is_ignored():
+    # exit 0 + non-empty stdout is a success; stderr quota noise is irrelevant
+    runner = FakeRunner({"aa": [_proc(returncode=0, stdout="valid page",
+                                      stderr="warning: nearing capacity 429")]})
+    chain = ProviderChain([_provider("first", "/bin/aa"),
+                           _provider("second", "/bin/bb")], run_fn=runner)
+    result = chain.run_mission("q")
+    assert result.ok is True and result.text == "valid page"
+    assert result.provider == "first"
+    assert "first" not in chain.dead_providers          # not marked dead on success
+    # a subsequent mission still uses that provider first
+    second = chain.run_mission("q2")
+    assert second.provider == "first"
+
+
 def test_quota_pattern_match_is_case_insensitive():
     runner = FakeRunner({"aa": [_proc(returncode=1, stderr="429 Too Many Requests")],
                          "bb": [_proc(stdout="B")]})
