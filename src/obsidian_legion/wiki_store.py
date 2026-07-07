@@ -16,6 +16,7 @@ from .wiki_models import (
     _type_to_dir,
     file_hash,
     parse_article,
+    slugify,
 )
 
 
@@ -232,17 +233,52 @@ class WikiStore:
         text_results = [article for _, article in scored[:limit]]
 
         if deep and len(text_results) < limit:
-            qdrant_results = self._qdrant_search(query, limit=limit - len(text_results))
-            # Deduplicate by article_id
+            # _qdrant_search now returns vaultgraph embedder hits (list[dict],
+            # §6.3). Map them into WikiArticle to match the non-deep return shape,
+            # deduplicating by both article_id and path so a lexical + semantic
+            # hit on the same note yields a single entry.
+            hits = self._qdrant_search(query, limit=limit - len(text_results))
             seen_ids = {a.article_id for a in text_results}
-            for article in qdrant_results:
-                if article.article_id not in seen_ids:
-                    text_results.append(article)
-                    seen_ids.add(article.article_id)
-                    if len(text_results) >= limit:
-                        break
+            seen_paths = {str(a.path) for a in text_results if a.path is not None}
+            for hit in hits:
+                article = self._hit_to_article(hit)
+                hit_path = str(article.path) if article.path is not None else None
+                if article.article_id in seen_ids or (
+                    hit_path is not None and hit_path in seen_paths
+                ):
+                    continue
+                text_results.append(article)
+                seen_ids.add(article.article_id)
+                if hit_path is not None:
+                    seen_paths.add(hit_path)
+                if len(text_results) >= limit:
+                    break
 
         return text_results
+
+    def _hit_to_article(self, hit: dict) -> WikiArticle:
+        """Map a vaultgraph embedder hit (dict) into a WikiArticle deep-search supplement.
+
+        Hits carry {path, title, score, ...} (± id/snippet/tags). Mirrors the
+        non-deep return shape; WikiArticle has no source/kind field to tag, so
+        deep provenance is left implicit (article_type defaults to 'topic').
+        """
+        title = hit.get("title") or "Untitled"
+        hit_path = hit.get("path") or ""
+        now = datetime.now().astimezone()
+        return WikiArticle(
+            article_id=hit.get("id") or slugify(title),
+            title=title,
+            article_type=hit.get("type", "topic"),
+            summary=hit.get("summary", ""),
+            content=hit.get("snippet") or hit.get("content", ""),
+            tags=list(hit.get("tags") or []),
+            backlinks=[],
+            source_files=[hit_path] if hit_path else [],
+            created_at=now,
+            updated_at=now,
+            path=Path(hit_path) if hit_path else None,
+        )
 
     def _qdrant_search(self, query: str, limit: int) -> list[dict]:
         """Deep search now delegates to the vaultgraph MiniLM-384 contract

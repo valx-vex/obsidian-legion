@@ -196,6 +196,48 @@ def test_wiki_search_no_results(tmp_path: Path) -> None:
     assert results == []
 
 
+def test_wiki_deep_search_merges_dict_hits(tmp_path: Path, monkeypatch) -> None:
+    """§6.3 seam fix: deep=True merges dict-shaped embedder hits into WikiArticle
+    results — lexical first, deep as supplements, no AttributeError, no dup path."""
+    vault = make_vault(tmp_path)
+    paths = LegionPaths.discover(vault)
+    wiki = WikiStore(paths, compiler=MockCompiler())
+    wiki.bootstrap()
+
+    make_raw_file(vault, "consciousness.md", "Deep consciousness research")
+    wiki.compile_all()
+
+    class _FakeEmbedder:
+        def __init__(self, qdrant_url, collection):
+            pass
+
+        def search(self, query, k):
+            # Two hits on the SAME path — must collapse to one after merge.
+            return [
+                {"path": "semantic/only.md", "title": "Semantic Only", "score": 0.9},
+                {"path": "semantic/only.md", "title": "Semantic Only", "score": 0.8},
+            ]
+
+    import obsidian_legion.vaultgraph.embedder as emb
+    monkeypatch.setattr(emb, "VaultEmbedder", _FakeEmbedder)
+
+    results = wiki.search("consciousness", deep=True, limit=10)
+
+    # Shape is consistent with the non-deep path: every entry is a WikiArticle
+    # and round-trips to dict without AttributeError.
+    assert all(isinstance(a, WikiArticle) for a in results)
+    dicts = [a.to_dict() for a in results]
+    out_paths = [d.get("path") for d in dicts]
+
+    # Lexical match present.
+    assert any(
+        "consciousness" in a.article_id.lower() or "consciousness" in a.content.lower()
+        for a in results
+    )
+    # Deep-only hit merged in exactly once (deduped across the two same-path hits).
+    assert out_paths.count("semantic/only.md") == 1
+
+
 def test_wiki_status(tmp_path: Path) -> None:
     vault = make_vault(tmp_path)
     paths = LegionPaths.discover(vault)
