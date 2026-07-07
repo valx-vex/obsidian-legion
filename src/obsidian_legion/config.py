@@ -63,7 +63,7 @@ class LegionPaths:
             wiki_config=wiki_root / ".wiki_config.yaml",
             wiki_public_root=root / "wiki-public",
             qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
-            qdrant_collection=os.environ.get("QDRANT_COLLECTION", "vexpedia"),
+            qdrant_collection=os.environ.get("QDRANT_COLLECTION", "vault_eternal"),
         )
 
     @staticmethod

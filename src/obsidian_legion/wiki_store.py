@@ -244,63 +244,19 @@ class WikiStore:
 
         return text_results
 
-    def _qdrant_search(self, query: str, limit: int = 10) -> list[WikiArticle]:
-        """Search Qdrant vector store. Returns empty list if Qdrant is unavailable."""
-        try:
-            import httpx
-        except ImportError:
-            return []
+    def _qdrant_search(self, query: str, limit: int) -> list[dict]:
+        """Deep search now delegates to the vaultgraph MiniLM-384 contract
 
-        # Generate embedding via Ollama
+        (spec §6.3). The old inline nomic-768/vexpedia HTTP path is superseded;
+        returns [] on any failure, exactly like the legacy behavior.
+        """
         try:
-            embed_resp = httpx.post(
-                "http://localhost:11434/api/embed",
-                json={"model": "nomic-embed-text", "input": query},
-                timeout=30.0,
-            )
-            embed_resp.raise_for_status()
-            embedding = embed_resp.json().get("embeddings", [[]])[0]
-            if not embedding:
-                return []
+            from .vaultgraph.embedder import VaultEmbedder
+            embedder = VaultEmbedder(qdrant_url=self.paths.qdrant_url,
+                                     collection=self.paths.qdrant_collection)
+            return embedder.search(query, k=limit)
         except Exception:
             return []
-
-        # Query Qdrant
-        try:
-            qdrant_resp = httpx.post(
-                f"{self.paths.qdrant_url}/collections/{self.paths.qdrant_collection}/points/search",
-                json={
-                    "vector": embedding,
-                    "limit": limit,
-                    "with_payload": True,
-                },
-                timeout=10.0,
-            )
-            qdrant_resp.raise_for_status()
-            results = qdrant_resp.json().get("result", [])
-        except Exception:
-            return []
-
-        articles: list[WikiArticle] = []
-        now = datetime.now().astimezone()
-        for hit in results:
-            payload = hit.get("payload", {})
-            title = payload.get("title", "Untitled")
-            from .wiki_models import slugify
-            articles.append(WikiArticle(
-                article_id=slugify(title),
-                title=title,
-                article_type=payload.get("type", "topic"),
-                summary=payload.get("summary", ""),
-                content=payload.get("content_preview", payload.get("content", "")),
-                tags=payload.get("tags", []),
-                backlinks=[],
-                source_files=[payload.get("path", "")] if payload.get("path") else [],
-                created_at=now,
-                updated_at=now,
-                path=Path(payload["path"]) if payload.get("path") else None,
-            ))
-        return articles
 
     def status(self) -> dict[str, Any]:
         manifest = WikiManifest.load(self.paths.wiki_manifest)

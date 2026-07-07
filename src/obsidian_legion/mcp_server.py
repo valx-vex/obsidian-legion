@@ -7,6 +7,100 @@ from .config import LegionPaths
 from .store import TaskStore
 
 
+def _resolve_vault(vault: str | None) -> Path:
+    from .vaultgraph import registry as reg
+
+    if vault is None:
+        _name, root = reg.default_vault()
+        return Path(root)
+    candidate = Path(vault).expanduser()
+    if candidate.exists() and candidate.is_dir():
+        return candidate.resolve()
+    registry = reg.load_registry()
+    if vault in registry:
+        return Path(registry[vault])
+    return candidate.resolve()
+
+
+def _graph_db(root: Path):
+    from .vaultgraph.graphdb import GraphDB
+
+    db_path = root / ".legion" / "graph.sqlite"
+    if not db_path.exists():
+        return None
+    return GraphDB(db_path)
+
+
+def _graph_embedder(root: Path):
+    from .vaultgraph.embedder import VaultEmbedder
+
+    return VaultEmbedder()
+
+
+def _open_graph(vault: str | None):
+    """Returns (root, db, error_payload). On success error_payload is None."""
+    try:
+        root = _resolve_vault(vault)
+        db = _graph_db(root)
+    except ImportError:
+        return None, None, {"error": "vaultgraph extras not installed"}
+    except FileNotFoundError:
+        return None, None, {"error": "graph not built yet",
+                            "hint": "obsidian-legion graph build"}
+    if db is None:
+        return None, None, {"error": "graph not built yet",
+                            "hint": "obsidian-legion graph build"}
+    return root, db, None
+
+
+def _hit_key(hit: dict):
+    return hit.get("path") or hit.get("relpath") or hit.get("id")
+
+
+def _hit_score(hit: dict) -> float:
+    for key in ("score", "cosine", "weight"):
+        value = hit.get(key)
+        if value is not None:
+            return float(value)
+    return 0.0
+
+
+def _merge_hits(lexical: list[dict], semantic: list[dict]) -> list[dict]:
+    best: dict = {}
+    for source, hits in (("lexical", lexical), ("semantic", semantic)):
+        for hit in hits or []:
+            key = _hit_key(hit)
+            if key is None:
+                continue
+            score = _hit_score(hit)
+            entry = best.get(key)
+            if entry is None:
+                best[key] = {"path": key, "score": score, "sources": [source], "raw": hit}
+            else:
+                entry["sources"].append(source)
+                if score > entry["score"]:
+                    entry["score"] = score
+    merged = list(best.values())
+    merged.sort(key=lambda item: (-item["score"], item["path"]))
+    return merged
+
+
+def _read_wiki_page(root: Path, name: str) -> dict:
+    wiki = root / "wiki"
+    candidates = [
+        wiki / name, wiki / f"{name}.md",
+        wiki / "topics" / name, wiki / "topics" / f"{name}.md",
+        wiki / "entities" / name, wiki / "entities" / f"{name}.md",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return {"name": name,
+                    "path": str(candidate.relative_to(root)),
+                    "content": candidate.read_text(encoding="utf-8")}
+    return {"error": "page not found",
+            "hint": "obsidian-legion wiki compile", "name": name}
+
+
 def build_mcp(paths: LegionPaths):
     try:
         from mcp.server.fastmcp import FastMCP
@@ -180,6 +274,69 @@ def build_mcp(paths: LegionPaths):
             return {"error": "Graphify not installed. Run: pip install graphifyy"}
         answer = query_graph(question, paths.vault_root)
         return {"answer": answer}
+
+    # --- Layer 3: vault graph tools (VEXPEDIA) — all heavy imports lazy ---
+
+    @mcp.tool()
+    def vault_search(query: str, k: int = 8, include_absent: bool = False,
+                     vault: str | None = None) -> dict:
+        """Hybrid FTS5 + semantic search over the vault graph. Absent-masked by default."""
+        root, db, error = _open_graph(vault)
+        if error:
+            return error
+        lexical = db.search_lexical(query, k=k, include_absent=include_absent)
+        semantic: list[dict] = []
+        try:
+            semantic = _graph_embedder(root).search(query, k=k, include_absent=include_absent)
+        except Exception:
+            semantic = []
+        return {"results": _merge_hits(lexical, semantic)[:k]}
+
+    @mcp.tool()
+    def vault_neighbors(key: str, depth: int = 1, kinds: list[str] | None = None,
+                        vault: str | None = None) -> dict:
+        """Typed neighborhood of a note/entity in the vault graph."""
+        _root, db, error = _open_graph(vault)
+        if error:
+            return error
+        return db.neighbors(key, depth=depth, kinds=kinds)
+
+    @mcp.tool()
+    def vault_path(a: str, b: str, vault: str | None = None) -> dict:
+        """Shortest path between two nodes in the vault graph."""
+        _root, db, error = _open_graph(vault)
+        if error:
+            return error
+        return {"path": db.shortest_path(a, b)}
+
+    @mcp.tool()
+    def vault_communities(query: str | None = None, vault: str | None = None) -> dict:
+        """List graph communities, optionally filtered by a substring of the name."""
+        _root, db, error = _open_graph(vault)
+        if error:
+            return error
+        communities = db.communities()
+        if query:
+            needle = query.lower()
+            communities = [c for c in communities
+                           if needle in str(c.get("name", "")).lower()]
+        return {"communities": communities}
+
+    @mcp.tool()
+    def vault_page(name: str, vault: str | None = None) -> dict:
+        """Fetch a compiled VEXPEDIA wiki page by name."""
+        root, _db, error = _open_graph(vault)
+        if error:
+            return error
+        return _read_wiki_page(root, name)
+
+    @mcp.tool()
+    def vault_stats(vault: str | None = None) -> dict:
+        """Graph size/coverage stats."""
+        _root, db, error = _open_graph(vault)
+        if error:
+            return error
+        return db.stats()
 
     return mcp
 
