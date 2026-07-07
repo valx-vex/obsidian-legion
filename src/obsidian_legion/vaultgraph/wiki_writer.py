@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -36,9 +39,32 @@ class WikiWriter:
 
     # -- public API ---------------------------------------------------------
     def update(self, budget: int = 25, bootstrap: bool = False,
-               bootstrap_cap: int = 150) -> dict:
+               bootstrap_cap: int = 150, max_wall_s: int | None = 1800) -> dict:
+        # Same lock as the graph writer (spec §4.6): the wiki phase must not run
+        # concurrently with an in-progress graph rebuild. Each phase takes the
+        # lock itself; nightly never holds it around both.
+        import fcntl
+
+        legion = self.vault_root / ".legion"
+        legion.mkdir(parents=True, exist_ok=True)
+        lock_fh = open(legion / ".lock", "w")
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            lock_fh.close()
+            return {"skipped": "already_running", "noop": True}
+
+        try:
+            return self._update_locked(budget, bootstrap, bootstrap_cap, max_wall_s)
+        finally:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+            lock_fh.close()
+
+    def _update_locked(self, budget: int, bootstrap: bool, bootstrap_cap: int,
+                       max_wall_s: int | None) -> dict:
         report = {"pages_written": 0, "pages_skipped": 0, "pages_deferred": 0,
-                  "pages_failed": 0, "noop": False, "provider_fates": {}}
+                  "pages_failed": 0, "noop": False, "wall_clock_stop": False,
+                  "provider_fates": {}}
 
         specs = [s for s in select_pages(self.db)
                  if s.wiki_relpath not in self._blocklist()]
@@ -80,7 +106,13 @@ class WikiWriter:
             self._save_state(state)                 # persist reconciliation
             return report
 
+        started = time.monotonic()
+        processed = 0
         for spec, current in to_write:
+            # Wall-clock budget: defer the remaining pages if the night is spent.
+            if max_wall_s is not None and time.monotonic() - started >= max_wall_s:
+                report["wall_clock_stop"] = True
+                break
             outcome = self._generate(spec, current, fates)
             if outcome == "written":
                 report["pages_written"] += 1
@@ -90,6 +122,10 @@ class WikiWriter:
                 report["pages_failed"] += 1
             else:
                 report["pages_skipped"] += 1
+            processed += 1
+
+        if report["wall_clock_stop"]:
+            report["pages_deferred"] += len(to_write) - processed
 
         self._save_state(state)
         self.write_index(specs)
@@ -133,9 +169,8 @@ class WikiWriter:
                 lines.append(f"| [[wiki/{spec.wiki_relpath}\\|{spec.title}]] "
                              f"| {len(spec.source_relpaths)} |")
             lines.append("")
-        self.wiki_root.mkdir(parents=True, exist_ok=True)
         index = self.wiki_root / "index.md"
-        index.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _atomic_write(index, "\n".join(lines) + "\n")
         return index
 
     def validate_page(self, text: str) -> bool:
@@ -169,8 +204,7 @@ class WikiWriter:
                 fates[result.provider] = "used"
             page_text = self._compose(spec, current, result.text)
             if self.validate_page(page_text):
-                page_file.parent.mkdir(parents=True, exist_ok=True)
-                page_file.write_text(page_text, encoding="utf-8")
+                _atomic_write(page_file, page_text)
                 return "written"
         return "failed"
 
@@ -239,3 +273,18 @@ class WikiWriter:
         tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n",
                        encoding="utf-8")
         tmp.replace(self.state_path)
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Write via a same-dir temp file + os.replace (mirrors wiki_store).
+
+    A crash mid-write never leaves a half-written page or index behind; the
+    replace only touches (and re-mtimes) the target when a real write happens.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", delete=False, dir=path.parent
+    ) as handle:
+        handle.write(content)
+        temp_name = handle.name
+    os.replace(temp_name, path)

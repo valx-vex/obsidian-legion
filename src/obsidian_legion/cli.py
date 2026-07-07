@@ -592,7 +592,7 @@ def _handle_graph(args: argparse.Namespace, ui: CliUI) -> int:
             full=(command == "build"),
             skip_embeddings=getattr(args, "skip_embeddings", False),
         )
-        ui.print(json.dumps(report, indent=2))
+        ui.print(json.dumps(report, indent=2), raw=True)
         return 0
 
     from .vaultgraph.graphdb import GraphDB
@@ -603,17 +603,19 @@ def _handle_graph(args: argparse.Namespace, ui: CliUI) -> int:
     db = GraphDB(db_path)
 
     if command == "status":
-        ui.print(json.dumps(db.stats(), indent=2))
+        ui.print(json.dumps(db.stats(), indent=2), raw=True)
         return 0
 
     if command == "query":
         if args.search:
-            ui.print(json.dumps(db.search_lexical(args.search, k=args.limit), indent=2))
+            ui.print(json.dumps(db.search_lexical(args.search, k=args.limit), indent=2),
+                     raw=True)
         elif args.neighbors:
-            ui.print(json.dumps(db.neighbors(args.neighbors, depth=args.depth), indent=2))
+            ui.print(json.dumps(db.neighbors(args.neighbors, depth=args.depth), indent=2),
+                     raw=True)
         elif args.path:
             a, b = args.path
-            ui.print(json.dumps(db.shortest_path(a, b), indent=2))
+            ui.print(json.dumps(db.shortest_path(a, b), indent=2), raw=True)
         else:
             raise CliError("Specify --search QUERY, --neighbors KEY, or --path A B.")
         return 0
@@ -638,7 +640,7 @@ def _handle_wiki_reset(args: argparse.Namespace, ui: CliUI) -> int:
         root = _resolve_graph_vault(None)
     writer = _build_wiki_writer(root)
     result = writer.reset(regenerate=getattr(args, "regenerate", False))
-    ui.print(json.dumps(result, indent=2))
+    ui.print(json.dumps(result, indent=2), raw=True)
     return 0
 
 

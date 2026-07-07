@@ -1,10 +1,23 @@
 # tests/test_vg_wiki_writer.py
+import fcntl
+import importlib.util
+import json
 import sqlite3
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
+from obsidian_legion.vaultgraph import wiki_writer as wiki_writer_mod
 from obsidian_legion.vaultgraph.missions import PageSpec
 from obsidian_legion.vaultgraph.wiki_writer import WikiWriter
+
+
+def _load_nightly():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "legion_nightly.py"
+    spec = importlib.util.spec_from_file_location("legion_nightly", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 class FakeChain:
@@ -201,6 +214,87 @@ def test_reset_regenerate_also_wipes_state(tmp_path):
     result = writer.reset(regenerate=True)
     assert result["state_removed"] is True
     assert not (vault / ".legion" / "wiki-state.json").exists()
+
+
+def test_update_skips_when_graph_lock_held(tmp_path):
+    # Spec §4.6: the wiki phase takes the SAME lock as the graph writer, so it
+    # cannot run concurrently with an in-progress graph rebuild.
+    vault = make_vault(tmp_path)
+    db = one_topic_db(vault)
+    lock = open(vault / ".legion" / ".lock", "w")
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        report = WikiWriter(vault, db, FakeChain(GOOD_BODY)).update(bootstrap=True)
+        assert report == {"skipped": "already_running", "noop": True}
+        assert not (vault / "wiki").exists()                     # nothing written
+        assert not (vault / ".legion" / "wiki-state.json").exists()
+    finally:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
+
+
+def test_nightly_skips_wiki_when_graph_skipped():
+    nightly = _load_nightly()
+    run, reason = nightly.should_run_wiki({"skipped": "already_running"})
+    assert run is False and reason == "already_running"
+    run_ok, reason_ok = nightly.should_run_wiki(
+        {"notes_seen": 3, "changed": 1, "qdrant_ok": True})
+    assert run_ok is True and reason_ok is None
+
+
+def test_wall_clock_budget_defers_remaining(tmp_path, monkeypatch):
+    vault = make_vault(tmp_path)
+    db = FakeGraphDB(vault / ".legion" / "graph.sqlite")
+    (vault / "notes").mkdir()
+    for c in range(1, 4):                               # 3 qualifying communities
+        for i in range(5):
+            rel = f"notes/{c}_{i}.md"
+            (vault / rel).write_text(f"Note {c}.{i} flame. [[notes/{c}_0.md]]",
+                                     encoding="utf-8")
+            db.add_note(f"c{c}n{i}", rel, pagerank=float(c), community_id=c)
+
+    # started=0, page-1 check=0 (proceeds), page-2 check=5000 (over budget -> stop)
+    ticks = iter([0.0, 0.0, 5000.0])
+    last = [0.0]
+
+    def fake_monotonic():
+        try:
+            last[0] = next(ticks)
+        except StopIteration:
+            pass
+        return last[0]
+
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+    report = WikiWriter(vault, db, FakeChain(GOOD_BODY)).update(budget=25, max_wall_s=1800)
+
+    assert report["wall_clock_stop"] is True
+    assert report["pages_written"] == 1
+    assert report["pages_deferred"] == 2
+    pages = list((vault / "wiki" / "topics").glob("*.md"))
+    assert len(pages) == 1                              # only the first page written
+    state = json.loads((vault / ".legion" / "wiki-state.json").read_text())
+    assert len(state) == 1                             # state consistent with disk
+
+
+def test_pages_written_atomically(tmp_path, monkeypatch):
+    # No stray temp files left behind; a real write goes through os.replace.
+    vault = make_vault(tmp_path)
+    db = one_topic_db(vault)
+    replaced = []
+    real_replace = wiki_writer_mod.os.replace
+
+    def spy_replace(src, dst):
+        replaced.append(Path(dst).name)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(wiki_writer_mod.os, "replace", spy_replace)
+    report = WikiWriter(vault, db, FakeChain(GOOD_BODY)).update(bootstrap=True)
+    assert report["pages_written"] == 1
+    assert any(name.endswith(".md") for name in replaced)   # page via os.replace
+    assert "index.md" in replaced                           # index via os.replace
+    leftovers = list((vault / "wiki" / "topics").glob("*.tmp*")) + \
+        list((vault / "wiki").glob("*.tmp*"))
+    assert leftovers == []
 
 
 def test_write_index_is_deterministic(tmp_path):

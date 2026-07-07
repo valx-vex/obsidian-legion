@@ -80,8 +80,18 @@ class GraphBuilder:
                 if target is not None:
                     edges.add((rel, target, "wikilink"))
                     continue
+                # Normalize to a bare basename-stem before the private check:
+                # link targets may carry a ".md" suffix or a path prefix that
+                # canonical_key alone would leak past the stem-based blocklist.
+                # Parser already splits alias/heading — the defensive splits are
+                # free belt-and-braces.
+                raw = link.target.split("#")[0].split("|")[0].strip()
+                stem = Path(raw).name
+                if stem.lower().endswith(".md"):
+                    stem = stem[:-3]
+                probe = canonical_key(stem)
                 ck = canonical_key(link.target)
-                if ck in private_stems:
+                if ck in private_stems or probe in private_stems:
                     continue
                 pid = f"phantom:{ck}"
                 _node(pid, "phantom", link.target)

@@ -19,6 +19,20 @@ import traceback
 from pathlib import Path
 
 
+def should_run_wiki(graph_report: dict):
+    """Decide whether the wiki phase may run given the graph phase's report.
+
+    Skip the wiki phase when the graph phase itself was skipped (e.g. another
+    rebuild holds the lock: {"skipped": "already_running"}) — otherwise the
+    wiki writer could run concurrently with an in-progress graph rebuild.
+    Returns (run: bool, skip_reason: str | None).
+    """
+    reason = graph_report.get("skipped")
+    if reason:
+        return False, str(reason)
+    return True, None
+
+
 def _resolve_vault(vault_arg):
     from obsidian_legion.vaultgraph import registry
     if not vault_arg:
@@ -37,6 +51,8 @@ def main(argv=None) -> int:
     parser.add_argument("--vault", default="", help="registry name or absolute path")
     parser.add_argument("--skip-wiki", action="store_true")
     parser.add_argument("--budget", type=int, default=25)
+    parser.add_argument("--max-wall", type=int, default=1800,
+                        help="wiki-phase wall-clock budget in seconds")
     args = parser.parse_args(argv)
 
     from obsidian_legion.vaultgraph import report
@@ -55,7 +71,12 @@ def main(argv=None) -> int:
         graph_ok = False
 
     wiki_report = None
-    if not args.skip_wiki and graph_ok:
+    run_wiki, skip_reason = should_run_wiki(graph_report)
+    if args.skip_wiki:
+        wiki_report = {"skipped": "--skip-wiki"}
+    elif graph_ok and not run_wiki:
+        wiki_report = {"skipped": "graph skipped (" + skip_reason + ")"}
+    elif graph_ok:
         try:
             from obsidian_legion.vaultgraph.graphdb import GraphDB
             from obsidian_legion.vaultgraph.providers import (
@@ -65,14 +86,13 @@ def main(argv=None) -> int:
             chain = ProviderChain(default_providers())
             if any(chain.preflight().values()):
                 db = GraphDB(vault_root / ".legion" / "graph.sqlite")
-                wiki_report = WikiWriter(vault_root, db, chain).update(budget=args.budget)
+                wiki_report = WikiWriter(vault_root, db, chain).update(
+                    budget=args.budget, max_wall_s=args.max_wall)
             else:
                 wiki_report = {"skipped": "all providers down"}
         except Exception as exc:
             traceback.print_exc()
             wiki_report = {"skipped": f"error — {type(exc).__name__}: {exc}"}
-    elif args.skip_wiki:
-        wiki_report = {"skipped": "--skip-wiki"}
 
     report_path = report.write_report(vault_name, graph_report, wiki_report)
     print(json.dumps({

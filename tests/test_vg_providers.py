@@ -1,5 +1,6 @@
 import os
 import stat
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -150,6 +151,50 @@ def test_preflight_checks_exists_and_executable(tmp_path):
     ])
     flags = chain.preflight()
     assert flags == {"real": True, "missing": False}
+
+
+def test_two_consecutive_timeouts_retire_provider():
+    # Auth-hang budget: an interactive/unauthenticated provider that hangs must
+    # be retired dead-for-run after 2 back-to-back timeouts, not burn timeout_s
+    # per page all night.
+    calls = []
+
+    def timeout_runner(argv, input_text, timeout, env):
+        calls.append(os.path.basename(argv[0]))
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=timeout)
+
+    chain = ProviderChain([_provider("hang", "/bin/hang")], run_fn=timeout_runner)
+
+    first = chain.run_mission("m1")
+    assert first.ok is False
+    assert "hang" not in chain.dead_providers            # one timeout != dead
+    assert "timeout after" in first.error                # precise classification
+
+    chain.run_mission("m2")
+    assert "hang" in chain.dead_providers                # second consecutive -> dead
+
+    third = chain.run_mission("m3")
+    assert third.ok is False
+    assert len(calls) == 2                               # dead provider never re-invoked
+
+
+def test_generic_failure_between_timeouts_resets_streak():
+    # A non-timeout failure breaks the consecutive-timeout streak: the provider
+    # is NOT retired on the next lone timeout.
+    scripted = {"hang": [None, _proc(returncode=1, stderr="boom"), None]}
+
+    def runner(argv, input_text, timeout, env):
+        name = os.path.basename(argv[0])
+        item = scripted[name].pop(0)
+        if item is None:
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=timeout)
+        return item
+
+    chain = ProviderChain([_provider("hang", "/bin/hang")], run_fn=runner)
+    chain.run_mission("m1")                              # timeout -> count 1
+    chain.run_mission("m2")                              # generic failure -> reset
+    chain.run_mission("m3")                              # timeout -> count 1 again
+    assert "hang" not in chain.dead_providers
 
 
 def test_default_providers_uses_absolute_paths_and_skips_absent(monkeypatch):

@@ -1,9 +1,19 @@
 import fcntl
 import json
+import sqlite3
 from pathlib import Path
 
 from obsidian_legion.vaultgraph.builder import GraphBuilder
 from obsidian_legion.vaultgraph.graphdb import GraphDB
+
+
+def _all_node_fields(db_path):
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute("SELECT id, title, canonical_key, path FROM nodes").fetchall()
+    finally:
+        conn.close()
+    return [str(v) for row in rows for v in row if v is not None]
 
 
 class FakeEmbedder:
@@ -120,6 +130,37 @@ def test_nested_murphy_private_excluded(tmp_path):
     assert {n["relpath"] for n in emb.upserted} == {"pub.md"}
     db = GraphDB(vault / ".legion" / "graph.sqlite")
     assert not db.search_lexical("Secret", include_absent=True)
+
+
+def test_phantom_private_leak_via_md_suffix(tmp_path):
+    # [[SECRET_FILE.md]] must NOT create a phantom node: canonical_key of the
+    # raw target ("secret_file.md") would slip past the stem blocklist, so the
+    # probe is normalized to a bare basename-stem before the private check.
+    vault = make_vault(tmp_path)
+    write(vault, "pub1.md", "# Pub1\n\nlink to [[SECRET_FILE.md]]\n")
+    write(vault, "a/b/.murphy_private/SECRET_FILE.md", "# Secret\n")
+    GraphBuilder(vault, embedder=FakeEmbedder()).update(full=True)
+    db_path = vault / ".legion" / "graph.sqlite"
+    fields = _all_node_fields(db_path)
+    assert not any("secret_file" in f.lower() for f in fields), fields
+    neighbors = GraphDB(db_path).neighbors("pub1.md", depth=1)
+    joined = json.dumps(neighbors).lower()
+    assert "secret_file" not in joined and "murphy_private" not in joined
+
+
+def test_phantom_private_leak_via_path_prefix(tmp_path):
+    # [[x/y/SECRET_FILE]] must NOT leak either: a path prefix would otherwise
+    # dodge the stem-based blocklist.
+    vault = make_vault(tmp_path)
+    write(vault, "pub2.md", "# Pub2\n\nlink to [[x/y/SECRET_FILE]]\n")
+    write(vault, "a/b/.murphy_private/SECRET_FILE.md", "# Secret\n")
+    GraphBuilder(vault, embedder=FakeEmbedder()).update(full=True)
+    db_path = vault / ".legion" / "graph.sqlite"
+    fields = _all_node_fields(db_path)
+    assert not any("secret_file" in f.lower() for f in fields), fields
+    neighbors = GraphDB(db_path).neighbors("pub2.md", depth=1)
+    joined = json.dumps(neighbors).lower()
+    assert "secret_file" not in joined and "murphy_private" not in joined
 
 
 def test_second_concurrent_run_skips(tmp_path):

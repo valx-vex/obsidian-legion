@@ -50,6 +50,10 @@ class ProviderChain:
         self.providers = list(providers or [])
         self.run_fn = run_fn or _default_run_fn
         self.dead_providers: set[str] = set()
+        # Consecutive-timeout counter per provider, persisted across missions
+        # within a run: an unauthenticated interactive provider that hangs is
+        # retired dead-for-run after 2 back-to-back timeouts (auth-hang budget).
+        self._timeout_counts: dict[str, int] = {}
 
     def preflight(self) -> dict[str, bool]:
         flags: dict[str, bool] = {}
@@ -67,12 +71,24 @@ class ProviderChain:
             name = provider["name"]
             if name in self.dead_providers:
                 continue
-            returncode, stdout, stderr = self._invoke(provider, prompt)
+            returncode, stdout, stderr, timed_out = self._invoke(provider, prompt)
             # Success = exit 0 with non-empty stdout. stderr is irrelevant then;
             # quota classification applies ONLY to invocations that already failed.
             if returncode == 0 and (stdout or "").strip():
+                self._timeout_counts[name] = 0
                 return MissionResult(text=stdout, provider=name, ok=True,
                                      quota_exhausted=saw_quota, error="")
+            # Auth-hang budget: retire a provider that times out twice in a row.
+            # An interactive/unauthenticated provider otherwise burns timeout_s
+            # per page for the whole night.
+            if timed_out:
+                self._timeout_counts[name] = self._timeout_counts.get(name, 0) + 1
+                last_error = f"{name}: {stderr}"
+                if self._timeout_counts[name] >= 2:
+                    self.dead_providers.add(name)
+                continue
+            # Any non-timeout outcome breaks the consecutive-timeout streak.
+            self._timeout_counts[name] = 0
             stderr_lower = (stderr or "").lower()
             if any(pattern in stderr_lower for pattern in QUOTA_PATTERNS):
                 self.dead_providers.add(name)
@@ -102,9 +118,12 @@ class ProviderChain:
             else:
                 input_text = prompt
             proc = self.run_fn(argv, input_text, timeout, env)
-            return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
-        except Exception as exc:  # TimeoutExpired, OSError, etc. -> generic failure
-            return -1, "", f"{type(exc).__name__}: {exc}"
+            return proc.returncode, (proc.stdout or ""), (proc.stderr or ""), False
+        except subprocess.TimeoutExpired:
+            # Distinguishable marker so run_mission can apply the auth-hang budget.
+            return -1, "", f"timeout after {timeout}s", True
+        except Exception as exc:  # OSError, etc. -> generic (non-timeout) failure
+            return -1, "", f"{type(exc).__name__}: {exc}", False
         finally:
             if tmp_path:
                 try:
