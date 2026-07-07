@@ -338,6 +338,27 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--provider", choices=["ollama", "claude", "gemini"], help="LLM provider override.")
         subparser.add_argument("--model", help="LLM model override.")
 
+    wiki_reset = wiki_sub.add_parser("reset", help="Wipe generated wiki pages and state.")
+    wiki_reset.add_argument("--regenerate", action="store_true", help="Wipe, then regenerate.")
+
+    graph = subparsers.add_parser("graph", help="Semantic vault graph (VEXPEDIA layer 1).")
+    graph_sub = graph.add_subparsers(dest="graph_command", required=True)
+    graph_build = graph_sub.add_parser("build", help="Full graph build (re-embed everything).")
+    graph_build.add_argument("--skip-embeddings", action="store_true")
+    graph_update = graph_sub.add_parser("update", help="Incremental graph update.")
+    graph_update.add_argument("--skip-embeddings", action="store_true")
+    graph_status = graph_sub.add_parser("status", help="Show graph stats.")
+    graph_query = graph_sub.add_parser("query", help="Query the built graph.")
+    graph_query.add_argument("--search", metavar="QUERY")
+    graph_query.add_argument("--neighbors", metavar="KEY")
+    graph_query.add_argument("--path", nargs=2, metavar=("A", "B"))
+    graph_query.add_argument("--depth", type=int, default=1)
+    graph_query.add_argument("--limit", type=int, default=8)
+    for graph_leaf in (graph_build, graph_update, graph_status, graph_query):
+        graph_leaf.add_argument(
+            "--vault", help="Vault name (registry) or path (default: registry default)."
+        )
+
     graphify_p = subparsers.add_parser(
         "graphify",
         help="Layer 0: Build knowledge graph from vault (requires graphifyy package).",
@@ -374,6 +395,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser, ui: CliUI) -> int:
+    if args.command == "graph":
+        return _handle_graph(args, ui)
+    if args.command == "wiki" and getattr(args, "wiki_command", None) == "reset":
+        return _handle_wiki_reset(args, ui)
+
     store = TaskStore(LegionPaths.discover(args.vault_root))
 
     if args.command == "bootstrap":
@@ -527,6 +553,93 @@ def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser, ui: Cli
 
     parser.error(f"Unsupported command: {args.command}")
     return 2
+
+
+def _resolve_graph_vault(vault_arg: str | None) -> Path:
+    from .vaultgraph import registry as reg
+
+    if vault_arg is None:
+        try:
+            _name, root = reg.default_vault()
+        except FileNotFoundError as exc:
+            raise CliError(
+                "No vault registered.",
+                hint="Register one in ~/.legion/vaults.json or pass --vault <path>.",
+            ) from exc
+        return Path(root)
+
+    candidate = Path(vault_arg).expanduser()
+    if candidate.exists() and candidate.is_dir():
+        return LegionPaths.discover(candidate, strict=False).vault_root
+
+    registry = reg.load_registry()
+    if vault_arg in registry:
+        return Path(registry[vault_arg])
+    raise CliError(
+        f"Unknown vault: {vault_arg}",
+        hint="Pass an existing vault path or a name registered in ~/.legion/vaults.json.",
+    )
+
+
+def _handle_graph(args: argparse.Namespace, ui: CliUI) -> int:
+    root = _resolve_graph_vault(getattr(args, "vault", None))
+    command = args.graph_command
+
+    if command in ("build", "update"):
+        from .vaultgraph.builder import GraphBuilder
+
+        report = GraphBuilder(root).update(
+            full=(command == "build"),
+            skip_embeddings=getattr(args, "skip_embeddings", False),
+        )
+        ui.print(json.dumps(report, indent=2))
+        return 0
+
+    from .vaultgraph.graphdb import GraphDB
+
+    db_path = root / ".legion" / "graph.sqlite"
+    if not db_path.exists():
+        raise CliError("Graph not built yet.", hint="Run: obsidian-legion graph build")
+    db = GraphDB(db_path)
+
+    if command == "status":
+        ui.print(json.dumps(db.stats(), indent=2))
+        return 0
+
+    if command == "query":
+        if args.search:
+            ui.print(json.dumps(db.search_lexical(args.search, k=args.limit), indent=2))
+        elif args.neighbors:
+            ui.print(json.dumps(db.neighbors(args.neighbors, depth=args.depth), indent=2))
+        elif args.path:
+            a, b = args.path
+            ui.print(json.dumps(db.shortest_path(a, b), indent=2))
+        else:
+            raise CliError("Specify --search QUERY, --neighbors KEY, or --path A B.")
+        return 0
+
+    return 2
+
+
+def _build_wiki_writer(root: Path):
+    from .vaultgraph.graphdb import GraphDB
+    from .vaultgraph.providers import ProviderChain
+    from .vaultgraph.wiki_writer import WikiWriter
+
+    db = GraphDB(root / ".legion" / "graph.sqlite")
+    chain = ProviderChain([])
+    return WikiWriter(root, db, chain)
+
+
+def _handle_wiki_reset(args: argparse.Namespace, ui: CliUI) -> int:
+    if getattr(args, "vault_root", None) is not None:
+        root = LegionPaths.discover(args.vault_root, strict=False).vault_root
+    else:
+        root = _resolve_graph_vault(None)
+    writer = _build_wiki_writer(root)
+    result = writer.reset(regenerate=getattr(args, "regenerate", False))
+    ui.print(json.dumps(result, indent=2))
+    return 0
 
 
 def _run_init(store: TaskStore, ui: CliUI) -> None:

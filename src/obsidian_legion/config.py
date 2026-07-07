@@ -35,8 +35,8 @@ class LegionPaths:
     qdrant_collection: str
 
     @classmethod
-    def discover(cls, vault_root: Path | None = None) -> "LegionPaths":
-        root = cls._resolve_vault_root(vault_root)
+    def discover(cls, vault_root: Path | None = None, strict: bool = True) -> "LegionPaths":
+        root = cls._resolve_vault_root(vault_root, strict=strict)
         action_points_root = root / "06-daily" / "action-points"
         wiki_root = root / "wiki"
         return cls(
@@ -67,21 +67,24 @@ class LegionPaths:
         )
 
     @staticmethod
-    def _resolve_vault_root(explicit_root: Path | None) -> Path:
+    def _resolve_vault_root(explicit_root: Path | None, strict: bool = True) -> Path:
+        # Explicit --vault-root (and registry roots) trust .obsidian alone.
         if explicit_root is not None:
             root = explicit_root.expanduser().resolve()
-            if _looks_like_vault(root):
+            if _looks_like_vault_root(root):
                 return root
             raise FileNotFoundError(f"{root} does not look like an Obsidian vault root.")
+
+        check = _looks_like_vault if strict else _looks_like_vault_root
 
         env_root = os.environ.get("OBSIDIAN_LEGION_VAULT")
         if env_root:
             root = Path(env_root).expanduser().resolve()
-            if _looks_like_vault(root):
+            if check(root):
                 return root
 
         for start in [Path.cwd(), *Path.cwd().parents]:
-            if _looks_like_vault(start):
+            if check(start):
                 return start.resolve()
 
         raise FileNotFoundError(
@@ -111,6 +114,10 @@ class LegionPaths:
             self.wiki_public_root,
         ]:
             path.mkdir(parents=True, exist_ok=True)
+
+
+def _looks_like_vault_root(path: Path) -> bool:
+    return (path / ".obsidian").exists()
 
 
 def _looks_like_vault(path: Path) -> bool:
