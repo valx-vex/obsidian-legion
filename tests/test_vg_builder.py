@@ -66,6 +66,7 @@ def test_full_build_writes_graph_manifest_and_embeds(tmp_path):
     assert report["changed"] == 2
     assert report["embedded"] == 2
     assert report["qdrant_ok"] is True
+    assert "qdrant_error" not in report  # absent when the phase succeeds
     assert report["purged"] == 0 and report["absent_marked"] == 0
     assert report["unreadable"] == 0  # 0-when-none contract
     assert "skipped" not in report
@@ -192,6 +193,25 @@ def test_qdrant_failure_structural_still_builds(tmp_path):
     assert (vault / ".legion" / "graph.sqlite").exists()
     manifest = json.loads((vault / ".legion" / "graph-manifest.json").read_text())
     assert set(manifest) == {"a.md", "b.md"}
+
+
+def test_qdrant_failure_surfaces_error_reason(tmp_path):
+    # When the embedding phase raises, the swallowed exception's reason must be
+    # surfaced in the report so unattended nights record WHY, not just that it
+    # failed. Structural build still succeeds; report carries qdrant_error.
+    vault = make_vault(tmp_path)
+    write(vault, "a.md", "# A\n[[b]]\n")
+    write(vault, "b.md", "# B\n")
+
+    class BoomEmbedder(FakeEmbedder):
+        def ensure_collection(self):
+            raise ValueError("boom")
+
+    report = GraphBuilder(vault, embedder=BoomEmbedder()).update(full=True)
+    assert report["qdrant_ok"] is False
+    assert report["qdrant_error"] == "ValueError: boom"
+    assert report["notes_seen"] == 2
+    assert (vault / ".legion" / "graph.sqlite").exists()
 
 
 def test_skip_embeddings_builds_structure_only(tmp_path):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import traceback
 from pathlib import Path
 
 
@@ -192,6 +193,7 @@ class GraphBuilder:
                 nodes_map[rel]["sha256"] = sha[rel]
 
             qdrant_ok = True
+            qdrant_error: str | None = None
             embedded = 0
             semantic_edges: list[dict] = []
             if skip_embeddings:
@@ -206,9 +208,14 @@ class GraphBuilder:
                     if purge:
                         embedder.delete_points(purge)
                     semantic_edges = embedder.knn_edges()
-                except Exception:
+                except Exception as exc:
+                    # Unattended nights need the reason, not just qdrant_ok=False.
+                    # Surface it in the report and dump the stack to stderr so
+                    # launchd err-logs capture WHY the embedding phase failed.
                     qdrant_ok = False
+                    qdrant_error = f"{type(exc).__name__}: {exc}"
                     semantic_edges = []
+                    traceback.print_exc()
 
             valid_ids = set(nodes_map)
             semantic_edges = [{**e, "kind": "semantic"} for e in semantic_edges
@@ -240,7 +247,7 @@ class GraphBuilder:
                     new_manifest[rel] = manifest[rel]
             self._save_manifest(new_manifest)
 
-            return {
+            report = {
                 "vault": str(self.vault_root),
                 "notes_seen": len(included),
                 "unreadable": len(unreadable),
@@ -253,6 +260,9 @@ class GraphBuilder:
                 "duration_s": round(time.time() - started, 3),
                 "qdrant_ok": qdrant_ok,
             }
+            if qdrant_error is not None:
+                report["qdrant_error"] = qdrant_error
+            return report
         finally:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
             lock_fh.close()
