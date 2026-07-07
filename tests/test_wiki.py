@@ -172,6 +172,33 @@ def test_wiki_compile_dry_run(tmp_path: Path) -> None:
     assert len(manifest.entries) == 0
 
 
+def test_wiki_compile_vault_excludes_nested_murphy_private(tmp_path: Path) -> None:
+    """LEGACY vault-wide compile must never ingest sworn-private files, even
+    when .murphy_private is nested deep in the vault (a/.murphy_private/...)."""
+    vault = make_vault(tmp_path)
+    paths = LegionPaths.discover(vault)
+    wiki = WikiStore(paths, compiler=MockCompiler())
+    wiki.bootstrap()
+
+    public = vault / "a" / "public-note.md"
+    public.parent.mkdir(parents=True, exist_ok=True)
+    public.write_text("Public content", encoding="utf-8")
+
+    secret = vault / "a" / ".murphy_private" / "secret.md"
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_text("SWORN PRIVATE - must never be ingested", encoding="utf-8")
+
+    articles = wiki.compile_vault()
+
+    ingested_sources = {src for a in articles for src in a.source_files}
+    assert not any(".murphy_private" in src for src in ingested_sources)
+
+    manifest = WikiManifest.load(paths.wiki_manifest)
+    assert not manifest.is_ingested(secret)
+    # Sanity: the sibling public note IS scanned and ingested.
+    assert manifest.is_ingested(public)
+
+
 def test_wiki_search(tmp_path: Path) -> None:
     vault = make_vault(tmp_path)
     paths = LegionPaths.discover(vault)

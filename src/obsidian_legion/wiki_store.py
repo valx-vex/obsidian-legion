@@ -344,7 +344,20 @@ class WikiStore:
                 pending.append(raw_path)
         return pending
 
-    _VAULT_SCAN_EXCLUDES = {"wiki", ".obsidian", ".git", "node_modules", ".venv", "__pycache__"}
+    _VAULT_SCAN_EXCLUDES = {
+        "wiki",
+        ".obsidian",
+        ".git",
+        "node_modules",
+        ".venv",
+        "__pycache__",
+        ".murphy_private",
+        ".legion",
+        ".trash",
+        ".github",
+        ".crystl",
+        ".claude",
+    }
 
     def _find_vault_pending(
         self,
