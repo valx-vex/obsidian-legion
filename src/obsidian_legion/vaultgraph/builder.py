@@ -144,11 +144,29 @@ class GraphBuilder:
 
         try:
             exclusions = self.exclusions or ExclusionEngine(self.vault_root)
-            included = [Path(p).as_posix() for p in exclusions.iter_notes()]
-            included_set = set(included)
+            candidates = [Path(p).as_posix() for p in exclusions.iter_notes()]
             manifest = {} if full else self._load_manifest()
 
-            sha = {rel: self._sha256(self.vault_root / rel) for rel in included}
+            # Reading each note's bytes (for its content hash) is the first place
+            # a note's content is touched — before parsing. A note that iter_notes
+            # lists but can't be read (e.g. a dangling ``.md`` symlink) must be
+            # skipped AND counted: never silent, never fatal to an unattended run.
+            # Drop it from the included set so it never reaches parsing, nodes, or
+            # the manifest — treated exactly as if excluded. If it was present on a
+            # prior run it then falls naturally into the absent/purge path below by
+            # its disappearance from ``included_set``.
+            sha: dict[str, str] = {}
+            included: list[str] = []
+            unreadable: list[str] = []
+            for rel in candidates:
+                try:
+                    sha[rel] = self._sha256(self.vault_root / rel)
+                except OSError:
+                    unreadable.append(rel)
+                    continue
+                included.append(rel)
+            included_set = set(included)
+
             changed = [rel for rel in included if manifest.get(rel) != sha[rel]]
 
             private_basenames: set[str] = set()
@@ -225,6 +243,7 @@ class GraphBuilder:
             return {
                 "vault": str(self.vault_root),
                 "notes_seen": len(included),
+                "unreadable": len(unreadable),
                 "changed": len(changed),
                 "absent_marked": len(absent),
                 "purged": len(purge),

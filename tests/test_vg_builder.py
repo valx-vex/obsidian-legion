@@ -1,5 +1,6 @@
 import fcntl
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -66,6 +67,7 @@ def test_full_build_writes_graph_manifest_and_embeds(tmp_path):
     assert report["embedded"] == 2
     assert report["qdrant_ok"] is True
     assert report["purged"] == 0 and report["absent_marked"] == 0
+    assert report["unreadable"] == 0  # 0-when-none contract
     assert "skipped" not in report
     assert {n["relpath"] for n in emb.upserted} == {"apple.md", "banana.md"}
     manifest = json.loads((vault / ".legion" / "graph-manifest.json").read_text())
@@ -202,6 +204,35 @@ def test_skip_embeddings_builds_structure_only(tmp_path):
     assert report["embedded"] == 0
     assert emb.upserted == []
     assert (vault / ".legion" / "graph.sqlite").exists()
+
+
+def test_broken_symlink_note_skipped_and_counted(tmp_path):
+    # A dangling ``.md`` symlink is listed by iter_notes but cannot be read
+    # (read_bytes/read_text raise FileNotFoundError). It must be skipped AND
+    # counted — never fatal to an unattended build — and must NOT become a node.
+    # notes_seen keeps its current semantics (len of the readable included set)
+    # so it counts only the two good notes → 2, while unreadable == 1.
+    vault = make_vault(tmp_path)
+    write(vault, "good1.md", "# Good1\n[[good2]]\n")
+    write(vault, "good2.md", "# Good2\n")
+    os.symlink(tmp_path / "nowhere.md", vault / "broken.md")
+    emb = FakeEmbedder()
+    report = GraphBuilder(vault, embedder=emb).update(full=True)
+    assert "skipped" not in report
+    assert report["notes_seen"] == 2
+    assert report["unreadable"] == 1
+    assert {n["relpath"] for n in emb.upserted} == {"good1.md", "good2.md"}
+    db_path = vault / ".legion" / "graph.sqlite"
+    conn = sqlite3.connect(db_path)
+    try:
+        node_ids = {row[0] for row in conn.execute("SELECT id FROM nodes").fetchall()}
+    finally:
+        conn.close()
+    assert {"good1.md", "good2.md"} <= node_ids
+    assert "broken.md" not in node_ids
+    assert not any("broken" in nid.lower() for nid in node_ids)
+    manifest = json.loads((vault / ".legion" / "graph-manifest.json").read_text())
+    assert "broken.md" not in manifest
 
 
 def test_semantic_edges_get_kind_and_persist(tmp_path):
