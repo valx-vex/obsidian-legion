@@ -168,3 +168,27 @@ def probe_index(vault_root) -> tuple[bool, list[str]]:
     if ok:
         messages.append(f"index: exact match ({len(on_disk)} pages)")
     return ok, messages
+
+
+def probe_deadlinks(vault_root) -> tuple[bool, list[str]]:
+    """No [[wiki/...]] link in a generated page may resolve to a missing file."""
+    root = Path(vault_root)
+    wiki = root / "wiki"
+    ok = True
+    messages: list[str] = []
+    for sub in ("topics", "entities"):
+        directory = wiki / sub
+        if not directory.exists():
+            continue
+        for page in sorted(directory.glob("*.md")):
+            text = page.read_text(encoding="utf-8", errors="replace")
+            if not _is_generated(text):
+                continue
+            for target in _WIKI_LINK_RE.findall(text):
+                if not (wiki / target).exists():
+                    ok = False
+                    messages.append(
+                        f"{sub}/{page.name}: dead link -> wiki/{target}")
+    if ok:
+        messages.append("deadlinks: none")
+    return ok, messages

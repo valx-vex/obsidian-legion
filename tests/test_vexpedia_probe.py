@@ -150,3 +150,30 @@ def test_index_extra_disk_page_fails(tmp_path):
     ok, messages = probe.probe_index(vault)
     assert ok is False
     assert any("topics/b.md" in m for m in messages)
+
+
+def test_deadlinks_resolving_passes(tmp_path):
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    _write_page(wiki, "topics/a.md", body="# A\n\nSee [[wiki/topics/b.md]].")
+    _write_page(wiki, "topics/b.md", body="# B\n\nBody.")
+    ok, messages = probe.probe_deadlinks(vault)
+    assert ok is True
+
+
+def test_deadlinks_missing_target_fails(tmp_path):
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    _write_page(wiki, "topics/a.md", body="# A\n\nSee [[wiki/topics/gone.md]].")
+    ok, messages = probe.probe_deadlinks(vault)
+    assert ok is False
+    assert any("gone.md" in m for m in messages)
+
+
+def test_deadlinks_ignores_non_wiki_links(tmp_path):
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    _write_page(wiki, "topics/a.md",
+                body="# A\n\nSee [[notes/raw.md]] and [[SomeNote]].")
+    ok, messages = probe.probe_deadlinks(vault)
+    assert ok is True
