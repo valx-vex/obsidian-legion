@@ -168,3 +168,55 @@ def test_clean_bakeoff_removes_marker_and_report_keeps_foreign(tmp_path):
     assert not (bake / "a.md").exists()
     assert not (vault / "wiki" / "_bakeoff" / "REPORT.md").exists()
     assert foreign.exists()
+
+
+import argparse
+
+from obsidian_legion import cli
+
+
+def _cli_vault(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / ".obsidian").mkdir(parents=True)
+    (vault / ".legion").mkdir(parents=True)
+    conn = sqlite3.connect(vault / ".legion" / "graph.sqlite")
+    conn.executescript(
+        "CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT, title TEXT, "
+        "canonical_key TEXT, path TEXT, mtime REAL, sha256 TEXT, "
+        "community_id INTEGER, centrality REAL, pagerank REAL, absent_since REAL);"
+        "CREATE TABLE edges (src TEXT, dst TEXT, kind TEXT, weight REAL, annotation TEXT);"
+        "CREATE TABLE communities (community_id INTEGER PRIMARY KEY, name TEXT, "
+        "size INTEGER, top_members_json TEXT);")
+    conn.commit()
+    conn.close()
+    return vault
+
+
+def test_cli_wiki_prune_handler_applies(tmp_path):
+    vault = _cli_vault(tmp_path)
+    topics = vault / "wiki" / "topics"
+    topics.mkdir(parents=True)
+    (topics / "orphan.md").write_text(
+        "---\ngenerated_by: legion-wiki\n"
+        'title: "O"\npage_id: "topic:o"\nsources:\n  - x.md\n'
+        'community_id: ""\nupdated_at: x\nmission_hash: h\n'
+        "template_version: v2-encyclo-1\nprovider: fake\n---\n# O\n\nB [[wiki/x]].\n",
+        encoding="utf-8")
+    args = argparse.Namespace(vault_root=vault, apply=True)
+    rc = cli._handle_wiki_prune(args, cli.CliUI())
+    assert rc == 0
+    assert not (topics / "orphan.md").exists()      # --apply deleted the orphan
+
+
+def test_cli_wiki_bakeoff_clean_handler(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / ".obsidian").mkdir(parents=True)
+    bake = vault / "wiki" / "_bakeoff" / "m"
+    bake.mkdir(parents=True)
+    (bake / "a.md").write_text("---\ngenerated_by: vexpedia-bakeoff\n---\n# A\n",
+                               encoding="utf-8")
+    args = argparse.Namespace(vault_root=vault, clean=True,
+                              models="glm-5:cloud", sample=None)
+    rc = cli._handle_wiki_bakeoff(args, cli.CliUI())
+    assert rc == 0
+    assert not (bake / "a.md").exists()             # --clean removed it

@@ -341,6 +341,23 @@ def build_parser() -> argparse.ArgumentParser:
     wiki_reset = wiki_sub.add_parser("reset", help="Wipe generated wiki pages and state.")
     wiki_reset.add_argument("--regenerate", action="store_true", help="Wipe, then regenerate.")
 
+    wiki_prune = wiki_sub.add_parser(
+        "prune", help="List (or --apply delete) orphaned generated wiki pages.")
+    wiki_prune.add_argument("--apply", action="store_true",
+                            help="Delete candidates (default: dry-run list).")
+
+    wiki_bakeoff = wiki_sub.add_parser(
+        "bakeoff", help="Generate sample pages per model into wiki/_bakeoff/ for election.")
+    wiki_bakeoff.add_argument(
+        "--models", default="minimax-m3:cloud,glm-5:cloud,glm-4.7:cloud",
+        help="Comma-separated model list (default: the three bake-off candidates).")
+    wiki_bakeoff.add_argument(
+        "--sample",
+        help="Comma-separated page_ids to sample (default: 4 topics + 2 entities).")
+    wiki_bakeoff.add_argument(
+        "--clean", action="store_true",
+        help="Remove wiki/_bakeoff/ output instead of generating.")
+
     graph = subparsers.add_parser("graph", help="Semantic vault graph (VEXPEDIA layer 1).")
     graph_sub = graph.add_subparsers(dest="graph_command", required=True)
     graph_build = graph_sub.add_parser("build", help="Full graph build (re-embed everything).")
@@ -399,6 +416,10 @@ def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser, ui: Cli
         return _handle_graph(args, ui)
     if args.command == "wiki" and getattr(args, "wiki_command", None) == "reset":
         return _handle_wiki_reset(args, ui)
+    if args.command == "wiki" and getattr(args, "wiki_command", None) == "prune":
+        return _handle_wiki_prune(args, ui)
+    if args.command == "wiki" and getattr(args, "wiki_command", None) == "bakeoff":
+        return _handle_wiki_bakeoff(args, ui)
 
     store = TaskStore(LegionPaths.discover(args.vault_root))
 
@@ -640,6 +661,40 @@ def _handle_wiki_reset(args: argparse.Namespace, ui: CliUI) -> int:
         root = _resolve_graph_vault(None)
     writer = _build_wiki_writer(root)
     result = writer.reset(regenerate=getattr(args, "regenerate", False))
+    ui.print(json.dumps(result, indent=2), raw=True)
+    return 0
+
+
+def _handle_wiki_prune(args: argparse.Namespace, ui: CliUI) -> int:
+    if getattr(args, "vault_root", None) is not None:
+        root = LegionPaths.discover(args.vault_root, strict=False).vault_root
+    else:
+        root = _resolve_graph_vault(None)
+    writer = _build_wiki_writer(root)
+    result = writer.prune(apply=getattr(args, "apply", False))
+    ui.print(json.dumps(result, indent=2), raw=True)
+    return 0
+
+
+def _handle_wiki_bakeoff(args: argparse.Namespace, ui: CliUI) -> int:
+    if getattr(args, "vault_root", None) is not None:
+        root = LegionPaths.discover(args.vault_root, strict=False).vault_root
+    else:
+        root = _resolve_graph_vault(None)
+    from .vaultgraph.bakeoff import clean_bakeoff, run_bakeoff
+
+    if getattr(args, "clean", False):
+        result = clean_bakeoff(root)
+        ui.print(json.dumps(result, indent=2), raw=True)
+        return 0
+    from .vaultgraph.graphdb import GraphDB
+
+    db = GraphDB(root / ".legion" / "graph.sqlite")
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    sample_ids = None
+    if getattr(args, "sample", None):
+        sample_ids = [s.strip() for s in args.sample.split(",") if s.strip()]
+    result = run_bakeoff(root, db, models, sample_ids=sample_ids)
     ui.print(json.dumps(result, indent=2), raw=True)
     return 0
 
