@@ -22,6 +22,15 @@ from dataclasses import dataclass
 
 QUOTA_PATTERNS = ("quota", "rate limit", "429", "resource exhausted", "capacity")
 
+# The elected Ollama-cloud model (D4); overridable via LEGION_OLLAMA_MODEL.
+DEFAULT_WIKI_MODEL = "minimax-m3:cloud"
+
+# HTTP statuses meaning "this cloud provider is done for the whole run": a
+# lapsed subscription or a rate limit fails every page, so retire once. The
+# http _invoke maps these to a stderr string containing 'quota', which the
+# existing QUOTA_PATTERNS substring check then retires run-wide.
+QUOTA_STATUS_CODES = (401, 402, 403, 429)
+
 
 @dataclass
 class MissionResult:
@@ -46,9 +55,13 @@ def _default_run_fn(argv, input_text, timeout, env):
 
 
 class ProviderChain:
-    def __init__(self, providers: list[dict], run_fn=None) -> None:
+    def __init__(self, providers: list[dict], run_fn=None, http_client=None) -> None:
         self.providers = list(providers or [])
         self.run_fn = run_fn or _default_run_fn
+        # Injected httpx.Client for tests (built with httpx.MockTransport). When
+        # None, _invoke_http / _preflight_http build a per-call client and close
+        # it; the injected one is left open for the caller/test to manage.
+        self._http_client = http_client
         self.dead_providers: set[str] = set()
         # Consecutive-timeout counter per provider, persisted across missions
         # within a run: an unauthenticated interactive provider that hangs is
@@ -58,11 +71,39 @@ class ProviderChain:
     def preflight(self) -> dict[str, bool]:
         flags: dict[str, bool] = {}
         for provider in self.providers:
+            if provider.get("kind") == "http":
+                flags[provider["name"]] = self._preflight_http(provider)
+                continue
             argv = provider.get("argv") or []
             binary = argv[0] if argv else ""
             flags[provider["name"]] = bool(binary) and os.path.exists(binary) and \
                 os.access(binary, os.X_OK)
         return flags
+
+    def _preflight_http(self, provider: dict) -> bool:
+        # Both probes are purely local (spec §4.1): a lapsed cloud subscription
+        # is NOT detected here — only at the first /api/chat, which then retires
+        # the provider run-wide. Any exception -> not ready.
+        import httpx
+
+        url = str(provider.get("url", "http://localhost:11434")).rstrip("/")
+        model = provider.get("model", "")
+        client = self._http_client or httpx.Client(timeout=5)
+        owns = self._http_client is None
+        try:
+            version = client.get(f"{url}/api/version", timeout=5)
+            if version.status_code != 200:
+                return False
+            tags = client.get(f"{url}/api/tags", timeout=5)
+            if tags.status_code != 200:
+                return False
+            names = [m.get("name") for m in tags.json().get("models", [])]
+            return model in names
+        except Exception:
+            return False
+        finally:
+            if owns:
+                client.close()
 
     def run_mission(self, prompt: str) -> MissionResult:
         saw_quota = False
@@ -101,6 +142,8 @@ class ProviderChain:
                              quota_exhausted=saw_quota, error=last_error)
 
     def _invoke(self, provider: dict, prompt: str):
+        if provider.get("kind") == "http":
+            return self._invoke_http(provider, prompt)
         argv = list(provider.get("argv") or [])
         prompt_via = provider.get("prompt_via", "stdin")
         timeout = provider.get("timeout_s", 300)
@@ -131,6 +174,38 @@ class ProviderChain:
                 except OSError:
                     pass
 
+    def _invoke_http(self, provider: dict, prompt: str):
+        import httpx
+
+        url = str(provider.get("url", "http://localhost:11434")).rstrip("/")
+        model = provider.get("model", "")
+        timeout = provider.get("timeout_s", 600)
+        client = self._http_client or httpx.Client(timeout=timeout)
+        owns = self._http_client is None
+        try:
+            resp = client.post(
+                f"{url}/api/chat",
+                json={"model": model,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "stream": False},
+            )
+            status = resp.status_code
+            if status == 200:
+                # message.thinking is NEVER read — reasoning is discarded by
+                # construction (spec §4.1); the sanitizer is defense-in-depth.
+                return (0, resp.json()["message"]["content"] or "", "", False)
+            if status in QUOTA_STATUS_CODES:
+                # 'quota' in the text makes QUOTA_PATTERNS retire it run-wide.
+                return (-1, "", f"http {status}: quota/auth", False)
+            return (-1, "", f"http {status}: {resp.text[:200]}", False)
+        except httpx.TimeoutException:
+            return (-1, "", f"timeout after {timeout}s", True)
+        except Exception as exc:
+            return (-1, "", f"{type(exc).__name__}: {exc}", False)
+        finally:
+            if owns:
+                client.close()
+
 
 def default_providers() -> list[dict]:
     """gemini -> codex -> ollama -> claude, absolute paths via shutil.which.
@@ -158,7 +233,7 @@ def default_providers() -> list[dict]:
 
     ollama = shutil.which("ollama")
     if ollama:
-        model = os.environ.get("LEGION_OLLAMA_MODEL", "gpt-oss:120b-cloud")
+        model = os.environ.get("LEGION_OLLAMA_MODEL", DEFAULT_WIKI_MODEL)
         entries.append({
             "name": "ollama", "argv": [ollama, "run", model],
             "prompt_via": "stdin", "timeout_s": 600, "env": {},
@@ -171,4 +246,22 @@ def default_providers() -> list[dict]:
             "prompt_via": "stdin", "timeout_s": 300, "env": {},
         })
 
+    return entries
+
+
+def wiki_providers() -> list[dict]:
+    """VEXPEDIA wiki chain: ollama-over-HTTP first, then the CLI fallbacks.
+
+    The elected Ollama-cloud model IS the author (spec §4.2); gemini/codex/
+    claude are resilience fallbacks only. Reuses default_providers() for the
+    CLI entries (absent binaries skipped) and drops its ollama CLI entry — the
+    HTTP entry supersedes it here.
+    """
+    url = os.environ.get("LEGION_OLLAMA_URL", "http://localhost:11434")
+    model = os.environ.get("LEGION_OLLAMA_MODEL", DEFAULT_WIKI_MODEL)
+    entries: list[dict] = [{
+        "name": "ollama", "kind": "http", "url": url,
+        "model": model, "timeout_s": 600,
+    }]
+    entries += [e for e in default_providers() if e["name"] != "ollama"]
     return entries

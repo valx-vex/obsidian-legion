@@ -1,8 +1,12 @@
+import json
 import os
 import stat
 import subprocess
 import sys
 from types import SimpleNamespace
+
+import httpx
+import pytest
 
 from obsidian_legion.vaultgraph import providers
 from obsidian_legion.vaultgraph.providers import MissionResult, ProviderChain
@@ -211,3 +215,153 @@ def test_default_providers_uses_absolute_paths_and_skips_absent(monkeypatch):
     for entry in entries:
         assert os.path.isabs(entry["argv"][0])            # shell-independent absolute path
     assert {"gemini", "codex", "ollama", "claude"} <= set(calls)  # all four probed
+
+
+# --- HTTP provider (kind == "http"), driven by httpx.MockTransport --------
+
+def _http_provider(name="ollama", url="http://fake", model="m:cloud", timeout_s=600):
+    return {"name": name, "kind": "http", "url": url, "model": model,
+            "timeout_s": timeout_s}
+
+
+def test_http_success_returns_content_only():
+    # The API separates message.content from message.thinking; the chain must
+    # return content and NEVER leak the reasoning field.
+    def handler(request):
+        assert request.url.path == "/api/chat"
+        payload = json.loads(request.content)
+        assert payload["model"] == "m:cloud"
+        assert payload["stream"] is False
+        assert payload["messages"] == [{"role": "user", "content": "write the page"}]
+        return httpx.Response(200, json={"message": {"content": "PAGE BODY",
+                                                     "thinking": "SECRET REASONING"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    chain = ProviderChain([_http_provider()], http_client=client)
+    result = chain.run_mission("write the page")
+    assert result.ok is True and result.provider == "ollama"
+    assert result.text == "PAGE BODY"
+    assert "SECRET" not in result.text
+    assert "thinking" not in result.text.lower()
+
+
+@pytest.mark.parametrize("status", [401, 402, 403, 429])
+def test_http_quota_status_retires_provider_and_advances(status):
+    def handler(request):
+        return httpx.Response(status, text="denied")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    runner = FakeRunner({"bb": [_proc(stdout="FALLBACK")]})
+    chain = ProviderChain([_http_provider(),
+                           _provider("second", "/bin/bb")],
+                          run_fn=runner, http_client=client)
+    result = chain.run_mission("q")
+    assert result.provider == "second" and result.text == "FALLBACK"
+    assert "ollama" in chain.dead_providers            # retired run-wide
+    assert result.quota_exhausted is True
+
+
+def test_http_non_quota_error_advances_without_retiring():
+    def handler(request):
+        return httpx.Response(500, text="internal boom")   # no quota vocabulary
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    runner = FakeRunner({"bb": [_proc(stdout="RECOVERED")]})
+    chain = ProviderChain([_http_provider(),
+                           _provider("second", "/bin/bb")],
+                          run_fn=runner, http_client=client)
+    result = chain.run_mission("q")
+    assert result.provider == "second" and result.text == "RECOVERED"
+    assert "ollama" not in chain.dead_providers        # generic failure != dead
+
+
+def test_http_timeout_feeds_consecutive_timeout_retirement():
+    def handler(request):
+        raise httpx.ConnectTimeout("slow")             # subclass of TimeoutException
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    chain = ProviderChain([_http_provider()], http_client=client)
+    first = chain.run_mission("m1")
+    assert first.ok is False
+    assert "ollama" not in chain.dead_providers        # one timeout != dead
+    assert "timeout after" in first.error
+    chain.run_mission("m2")
+    assert "ollama" in chain.dead_providers            # second consecutive -> dead
+
+
+# --- HTTP preflight -------------------------------------------------------
+
+def _preflight_handler(version_status=200, model_names=("m:cloud",)):
+    def handler(request):
+        if request.url.path == "/api/version":
+            return httpx.Response(version_status, json={"version": "0.1.0"})
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": n}
+                                                        for n in model_names]})
+        return httpx.Response(404, text="nope")
+    return handler
+
+
+def test_preflight_http_true_when_version_ok_and_model_present():
+    client = httpx.Client(transport=httpx.MockTransport(
+        _preflight_handler(model_names=("m:cloud", "other:cloud"))))
+    chain = ProviderChain([_http_provider(model="m:cloud")], http_client=client)
+    assert chain.preflight() == {"ollama": True}
+
+
+def test_preflight_http_false_when_model_missing():
+    client = httpx.Client(transport=httpx.MockTransport(
+        _preflight_handler(model_names=("other:cloud",))))
+    chain = ProviderChain([_http_provider(model="m:cloud")], http_client=client)
+    assert chain.preflight() == {"ollama": False}
+
+
+def test_preflight_http_false_on_connection_error():
+    def handler(request):
+        raise httpx.ConnectError("refused")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    chain = ProviderChain([_http_provider()], http_client=client)
+    assert chain.preflight() == {"ollama": False}
+
+
+# --- wiki_providers ordering + env overrides ------------------------------
+
+def test_wiki_providers_ollama_http_first_then_cli(monkeypatch):
+    monkeypatch.delenv("LEGION_OLLAMA_URL", raising=False)
+    monkeypatch.delenv("LEGION_OLLAMA_MODEL", raising=False)
+
+    def fake_which(binary):
+        return (f"/opt/homebrew/bin/{binary}"
+                if binary in ("gemini", "codex", "claude") else None)
+
+    monkeypatch.setattr(providers.shutil, "which", fake_which)
+    entries = providers.wiki_providers()
+    head = entries[0]
+    assert head["name"] == "ollama" and head["kind"] == "http"
+    assert head["url"] == "http://localhost:11434"
+    assert head["model"] == providers.DEFAULT_WIKI_MODEL
+    assert head["timeout_s"] == 600
+    assert [e["name"] for e in entries[1:]] == ["gemini", "codex", "claude"]
+    # exactly ONE ollama entry (the CLI ollama from default_providers is dropped)
+    assert sum(1 for e in entries if e["name"] == "ollama") == 1
+
+
+def test_wiki_providers_env_overrides(monkeypatch):
+    monkeypatch.setenv("LEGION_OLLAMA_URL", "http://box:9999")
+    monkeypatch.setenv("LEGION_OLLAMA_MODEL", "custom:cloud")
+    monkeypatch.setattr(providers.shutil, "which", lambda b: None)  # no CLI binaries
+    entries = providers.wiki_providers()
+    assert entries == [{"name": "ollama", "kind": "http", "url": "http://box:9999",
+                        "model": "custom:cloud", "timeout_s": 600}]
+
+
+def test_default_providers_ollama_uses_default_wiki_model(monkeypatch):
+    monkeypatch.delenv("LEGION_OLLAMA_MODEL", raising=False)
+    monkeypatch.setattr(providers.shutil, "which",
+                        lambda binary: f"/opt/homebrew/bin/{binary}")   # all present
+    entries = providers.default_providers()
+    ollama = next(e for e in entries if e["name"] == "ollama")
+    assert providers.DEFAULT_WIKI_MODEL in ollama["argv"]
+    assert "gpt-oss:120b-cloud" not in ollama["argv"]
+    assert providers.DEFAULT_WIKI_MODEL == "minimax-m3:cloud"
