@@ -177,3 +177,36 @@ def test_deadlinks_ignores_non_wiki_links(tmp_path):
                 body="# A\n\nSee [[notes/raw.md]] and [[SomeNote]].")
     ok, messages = probe.probe_deadlinks(vault)
     assert ok is True
+
+
+def test_mobile_identical_passes(tmp_path):
+    src = tmp_path / "src"
+    dest = tmp_path / "dest"
+    for root in (src, dest):
+        _write_page(root / "wiki", "topics/a.md", body="# A\n\nBody.")
+        _write_page(root / "wiki", "entities/b.md", body="# B\n\nBody.")
+    ok, messages = probe.probe_mobile(src, dest)
+    assert ok is True
+    assert any("match" in m for m in messages)
+
+
+def test_mobile_dest_missing_file_fails(tmp_path):
+    src = tmp_path / "src"
+    dest = tmp_path / "dest"
+    _write_page(src / "wiki", "topics/a.md", body="# A\n\nBody.")
+    _write_page(src / "wiki", "topics/b.md", body="# B\n\nBody.")
+    _write_page(dest / "wiki", "topics/a.md", body="# A\n\nBody.")
+    ok, messages = probe.probe_mobile(src, dest)
+    assert ok is False
+    assert any("topics/b.md" in m for m in messages)
+
+
+def test_mobile_dest_extra_file_fails(tmp_path):
+    src = tmp_path / "src"
+    dest = tmp_path / "dest"
+    _write_page(src / "wiki", "topics/a.md", body="# A\n\nBody.")
+    _write_page(dest / "wiki", "topics/a.md", body="# A\n\nBody.")
+    _write_page(dest / "wiki", "topics/extra.md", body="# X\n\nBody.")
+    ok, messages = probe.probe_mobile(src, dest)
+    assert ok is False
+    assert any("topics/extra.md" in m for m in messages)

@@ -192,3 +192,27 @@ def probe_deadlinks(vault_root) -> tuple[bool, list[str]]:
     if ok:
         messages.append("deadlinks: none")
     return ok, messages
+
+
+def _wiki_relpaths(vault_root: Path) -> set[str]:
+    wiki = vault_root / "wiki"
+    if not wiki.exists():
+        return set()
+    return {str(p.relative_to(wiki)) for p in wiki.rglob("*.md")}
+
+
+def probe_mobile(src_vault, dest_vault) -> tuple[bool, list[str]]:
+    """The set of wiki/**.md relpaths must be identical on both sides."""
+    src = _wiki_relpaths(Path(src_vault))
+    dest = _wiki_relpaths(Path(dest_vault))
+    missing = src - dest
+    extra = dest - src
+    ok = not missing and not extra
+    messages: list[str] = []
+    if missing:
+        messages.append(f"mobile: dest missing: {sorted(missing)}")
+    if extra:
+        messages.append(f"mobile: dest extra: {sorted(extra)}")
+    if ok:
+        messages.append(f"mobile: {len(src)} pages match")
+    return ok, messages
