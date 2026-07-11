@@ -252,6 +252,7 @@ class WikiWriter:
             report["pages_deferred"] += len(to_write) - processed
 
         self._save_state(state)
+        report["see_also_pruned"] = self.reconcile_see_also()["links_pruned"]
         self.write_index()
         report["provider_fates"] = fates
         report["stale_pages"] = self._count_stale(state)
@@ -306,6 +307,25 @@ class WikiWriter:
             title = _parse_title(text) or page.stem
             entries.append((relpath, title, _count_sources(text)))
         return entries
+
+    def reconcile_see_also(self) -> dict:
+        links_pruned = 0
+        sections_removed = 0
+        for sub in ("topics", "entities"):
+            directory = self.wiki_root / sub
+            if not directory.exists():
+                continue
+            for page in sorted(directory.glob("*.md")):
+                text = page.read_text(encoding="utf-8", errors="ignore")
+                if not _is_generated(text):
+                    continue
+                new_text, pruned, removed = _reconcile_see_also_text(
+                    text, self.vault_root)
+                if new_text != text:
+                    _atomic_write(page, new_text)
+                links_pruned += pruned
+                sections_removed += removed
+        return {"links_pruned": links_pruned, "sections_removed": sections_removed}
 
     def validate_page(self, text: str, *, kind: str = "", n_sources: int = 0,
                       candidates_provided: bool = False) -> bool:

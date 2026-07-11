@@ -641,3 +641,63 @@ def test_relpath_migration_deletes_old_file_on_rename(tmp_path):
     (page_id, entry), = state.items()
     assert page_id == "topic:notes/1_0.md"
     assert entry["relpath"] == "topics/renamed-anchor.md"
+
+
+def test_reconcile_see_also_prunes_dead_keeps_live(tmp_path):
+    vault = make_vault(tmp_path)
+    writer = WikiWriter(vault, FakeGraphDB(vault / ".legion" / "graph.sqlite"),
+                        FakeChain(GOOD_BODY))
+    topics = vault / "wiki" / "topics"
+    topics.mkdir(parents=True)
+    (topics / "live.md").write_text(_generated_page("Live", "topic:live"),
+                                    encoding="utf-8")   # See-also target that exists
+    page = topics / "subject.md"
+    page.write_text(
+        "---\ngenerated_by: legion-wiki\n"
+        'title: "Subject"\npage_id: "topic:subject"\nsources:\n  - notes/x.md\n'
+        'community_id: "1"\nupdated_at: x\nmission_hash: h\n'
+        "template_version: v2-encyclo-1\nprovider: fake\n---\n"
+        "# Subject\n\nLead about [[wiki/topics/ghost.md|Ghost]] in body.\n\n"
+        "## Details\n\nStuff.\n\n"
+        "## See also\n\n"
+        "- [[wiki/topics/live.md|Live]]\n"
+        "- [[wiki/topics/dead.md|Dead]]\n",
+        encoding="utf-8")
+    result = writer.reconcile_see_also()
+    text = page.read_text(encoding="utf-8")
+    assert result == {"links_pruned": 1, "sections_removed": 0}
+    assert "[[wiki/topics/live.md|Live]]" in text        # live link kept
+    assert "dead.md" not in text                          # dead link removed
+    assert "## See also" in text                          # section retained
+    assert "[[wiki/topics/ghost.md|Ghost]]" in text       # body link untouched
+    # idempotent second call
+    assert writer.reconcile_see_also() == {"links_pruned": 0, "sections_removed": 0}
+    assert page.read_text(encoding="utf-8") == text
+    # atomic: no stray temp files left behind
+    assert all(p.suffix == ".md" for p in topics.iterdir())
+
+
+def test_reconcile_see_also_removes_emptied_section(tmp_path):
+    vault = make_vault(tmp_path)
+    writer = WikiWriter(vault, FakeGraphDB(vault / ".legion" / "graph.sqlite"),
+                        FakeChain(GOOD_BODY))
+    topics = vault / "wiki" / "topics"
+    topics.mkdir(parents=True)
+    page = topics / "subject.md"
+    page.write_text(
+        "---\ngenerated_by: legion-wiki\n"
+        'title: "Subject"\npage_id: "topic:subject"\nsources:\n  - notes/x.md\n'
+        'community_id: "1"\nupdated_at: x\nmission_hash: h\n'
+        "template_version: v2-encyclo-1\nprovider: fake\n---\n"
+        "# Subject\n\nLead paragraph stays.\n\n"
+        "## Details\n\nDetail body stays.\n\n"
+        "## See also\n\n"
+        "- [[wiki/topics/gone1.md|Gone 1]]\n"
+        "- [[wiki/topics/gone2.md|Gone 2]]\n",
+        encoding="utf-8")
+    result = writer.reconcile_see_also()
+    text = page.read_text(encoding="utf-8")
+    assert result == {"links_pruned": 2, "sections_removed": 1}
+    assert "## See also" not in text                # header gone
+    assert "Lead paragraph stays." in text          # rest of body intact
+    assert "## Details" in text and "Detail body stays." in text
