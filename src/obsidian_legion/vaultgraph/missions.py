@@ -24,6 +24,7 @@ from pathlib import Path
 
 MISSION_TEMPLATE_VERSION = "v2-encyclo-1"
 _GROUNDING_CAP = 12                       # max source notes cited per page
+_RELATED_CAP = 8                          # max See-also candidates offered per page
 
 MISSION_RULES = """\
 You are compiling ONE page for VEXPEDIA, an encyclopedic wiki generated over a
@@ -116,7 +117,9 @@ def _fair_share(lengths: list[int], budget: int) -> list[int]:
 
 def select_pages(db, max_pages: int = 300, min_community_size: int = 5,
                  pagerank_percentile: float = 95.0,
-                 phantom_min_degree: int = 5) -> list[PageSpec]:
+                 phantom_min_degree: int = 5,
+                 coherence_threshold: float = 0.5,
+                 selection_report: dict | None = None) -> list[PageSpec]:
     db_path = getattr(db, "db_path", None)
     if db_path is None:
         raise ValueError("select_pages requires db.db_path (GraphDB sqlite path)")
@@ -132,12 +135,14 @@ def select_pages(db, max_pages: int = 300, min_community_size: int = 5,
         for src, dst in conn.execute("SELECT src, dst FROM edges WHERE kind='wikilink'"):
             inbound[dst].append(src)
             degree[dst] += 1
-        community_names: dict[int, str] = {}
-        try:
-            for cid, name in conn.execute("SELECT community_id, name FROM communities"):
-                community_names[cid] = name
-        except sqlite3.OperationalError:
-            pass
+        # Undirected adjacency over semantic + wikilink edges for the coherence
+        # gate. Semantic edges are stored asymmetrically (per-node top-k), so we
+        # add both directions or a src-only reading would undercount members.
+        adjacency: dict[str, set[str]] = defaultdict(set)
+        for src, dst in conn.execute(
+                "SELECT src, dst FROM edges WHERE kind IN ('semantic','wikilink')"):
+            adjacency[src].add(dst)
+            adjacency[dst].add(src)
     finally:
         conn.close()
 
@@ -161,18 +166,31 @@ def select_pages(db, max_pages: int = 300, min_community_size: int = 5,
 
     topic_ranked = []
     topic_member_ids: set[str] = set()   # notes owned by a qualifying topic page
+    skipped_incoherent: list[str] = []
     for cid, mem in members.items():
         if len(mem) < min_community_size:
             continue
         topic_member_ids.update(m["id"] for m in mem)
+        top = sorted(mem, key=lambda m: (-pr(m), m["path"]))[:_GROUNDING_CAP]
+        anchor = top[0]
+        anchor_title = anchor["title"] or anchor["path"]
+        slug = _slug(anchor_title)
+        # Coherence gate: fraction of top members having >=1 semantic/wikilink
+        # neighbor among the OTHER top members (undirected). Below threshold the
+        # community is skipped for CREATION and reported; never a silent drop.
+        top_ids = {m["id"] for m in top}
+        connected = sum(1 for m in top
+                        if adjacency.get(m["id"], set()) & (top_ids - {m["id"]}))
+        if connected / len(top) < coherence_threshold:
+            skipped_incoherent.append(slug)
+            continue
         mean_pr = sum(pr(m) for m in mem) / len(mem)
         score = len(mem) * mean_pr
-        top = sorted(mem, key=lambda m: (-pr(m), m["path"]))[:_GROUNDING_CAP]
-        name = community_names.get(cid) or (top[0]["title"] if top else f"community-{cid}")
         spec = PageSpec(kind="topic", key=str(cid),
-                        wiki_relpath=f"topics/{_slug(f'{cid}-{name}')}.md",
-                        title=name,
-                        source_relpaths=[m["path"] for m in top if m["path"]])
+                        wiki_relpath=f"topics/{slug}.md",
+                        title=anchor_title,
+                        source_relpaths=[m["path"] for m in top if m["path"]],
+                        page_id=f"topic:{anchor['path']}")
         topic_ranked.append((score, cid, spec))
     topic_ranked.sort(key=lambda t: (-t[0], t[1]))
     topics = [t[2] for t in topic_ranked]
@@ -189,7 +207,7 @@ def select_pages(db, max_pages: int = 300, min_community_size: int = 5,
         entity_ranked.append((pr(row), row["id"], PageSpec(
             kind="entity", key=row["id"],
             wiki_relpath=f"entities/{_slug(title)}.md", title=title,
-            source_relpaths=srcs)))
+            source_relpaths=srcs, page_id=f"entity:{row['path']}")))
 
     for node_id, row in nodes.items():
         if row["kind"] != "phantom" or degree.get(node_id, 0) < phantom_min_degree:
@@ -202,18 +220,49 @@ def select_pages(db, max_pages: int = 300, min_community_size: int = 5,
         entity_ranked.append((float(degree[node_id]), node_id, PageSpec(
             kind="entity", key=node_id,
             wiki_relpath=f"entities/{_slug(title)}.md", title=title,
-            source_relpaths=srcs)))
+            source_relpaths=srcs,
+            page_id=f"entity:{row['canonical_key'] or node_id}")))
     entity_ranked.sort(key=lambda t: (-t[0], str(t[1])))
     entities = [t[2] for t in entity_ranked]
 
-    selected: list[PageSpec] = []
-    seen: set[str] = set()
-    for spec in topics + entities:
-        if spec.wiki_relpath in seen:
-            continue
-        seen.add(spec.wiki_relpath)
-        selected.append(spec)
-    return selected[:max_pages]
+    # --- final selection: cap, collision-suffix slugs, wire candidates ------
+    ordered = topics + entities
+    selection_truncated = max(0, len(ordered) - max_pages)
+    selected = ordered[:max_pages]
+
+    # One slug namespace across BOTH kinds, resolved in selection order: the
+    # first occurrence keeps <slug>.md, later ones get <slug>-2.md, -3.md ...
+    # (a topic and an entity may not share a slug; never a silent drop).
+    seen: dict[str, int] = {}
+    for spec in selected:
+        base = _slug(spec.title)
+        n = seen.get(base, 0) + 1
+        seen[base] = n
+        final_slug = base if n == 1 else f"{base}-{n}"
+        folder = "topics" if spec.kind == "topic" else "entities"
+        spec.wiki_relpath = f"{folder}/{final_slug}.md"
+
+    # Related candidates: OTHER selected pages ranked by shared source notes
+    # (common source_relpaths, desc; ties by selection order). Computed after
+    # the final relpaths exist; zero-overlap pages get none.
+    source_sets = [set(s.source_relpaths) for s in selected]
+    for i, spec in enumerate(selected):
+        scored = []
+        for j, other in enumerate(selected):
+            if j == i:
+                continue
+            overlap = len(source_sets[i] & source_sets[j])
+            if overlap:
+                scored.append((overlap, j, other))
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        spec.related_candidates = [(o.wiki_relpath, o.title)
+                                   for _, _, o in scored[:_RELATED_CAP]]
+
+    if selection_report is not None:
+        selection_report["skipped_incoherent"] = skipped_incoherent
+        selection_report["selection_truncated"] = selection_truncated
+
+    return selected
 
 
 def build_mission_prompt(spec: PageSpec, vault_root: Path,

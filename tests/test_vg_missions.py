@@ -46,6 +46,10 @@ class FakeGraphDB:
         self._exec("INSERT INTO edges (src, dst, kind, weight) VALUES (?,?,?,1.0)",
                    (src, dst, "wikilink"))
 
+    def add_semantic(self, src, dst, weight=1.0):
+        self._exec("INSERT INTO edges (src, dst, kind, weight) VALUES (?,?,?,?)",
+                   (src, dst, "semantic", weight))
+
     def name_community(self, community_id, name):
         self._exec("INSERT INTO communities (community_id, name, size, "
                    "top_members_json) VALUES (?,?,0,'[]')", (community_id, name))
@@ -66,19 +70,26 @@ def test_topics_qualify_at_min_size_and_rank_by_size_times_pagerank(tmp_path):
     # community 1: 5 notes, mean pagerank 0.2 -> score 1.0
     for i in range(5):
         db.add_note(f"c1n{i}", f"c1/{i}.md", 0.2, community_id=1)
+    for i in range(1, 5):
+        db.add_semantic("c1n0", f"c1n{i}")                 # star -> coherent
     # community 2: 6 notes, mean pagerank 0.5 -> score 3.0 (ranks first)
     for i in range(6):
         db.add_note(f"c2n{i}", f"c2/{i}.md", 0.5, community_id=2)
+    for i in range(1, 6):
+        db.add_semantic("c2n0", f"c2n{i}")
     # community 3: 4 notes -> below min_community_size, dropped
     for i in range(4):
         db.add_note(f"c3n{i}", f"c3/{i}.md", 0.9, community_id=3)
-    db.name_community(1, "First")
-    db.name_community(2, "Second")
     specs = select_pages(db, min_community_size=5, pagerank_percentile=99.9)
     topics = [s for s in specs if s.kind == "topic"]
     assert [s.key for s in topics] == ["2", "1"]           # higher score first
-    assert topics[0].title == "Second"
-    assert topics[0].wiki_relpath.startswith("topics/")
+    # v2: title/slug/page_id derive from the anchor (top-PageRank member note),
+    # not a TF-IDF community name.
+    assert topics[0].title == "c2/0.md"
+    assert topics[0].page_id == "topic:c2/0.md"
+    # _slug("c2/0.md") == "c2-0-md" — a path-derived title keeps its "-md"
+    # tail in the slug (pre-flight scan fix: was wrongly "topics/c2-0.md").
+    assert topics[0].wiki_relpath == "topics/c2-0-md.md"
     assert all(sr.startswith("c2/") for sr in topics[0].source_relpaths)
 
 
@@ -117,11 +128,16 @@ def test_max_pages_caps_and_defers(tmp_path):
     for c in range(1, 11):                                 # 10 qualifying communities
         for i in range(5):
             db.add_note(f"c{c}n{i}", f"c{c}/{i}.md", pagerank=float(c), community_id=c)
+        for i in range(1, 5):
+            db.add_semantic(f"c{c}n0", f"c{c}n{i}")         # star -> coherent
+    report = {}
     specs = select_pages(db, max_pages=3, min_community_size=5,
-                         pagerank_percentile=99.9)
+                         pagerank_percentile=99.9, selection_report=report)
     assert len(specs) == 3
     # deterministic: highest size*mean_pagerank first (community 10, 9, 8)
     assert [s.key for s in specs] == ["10", "9", "8"]
+    assert report["selection_truncated"] == 7              # 10 candidates - 3 kept
+    assert report["skipped_incoherent"] == []
 
 
 def test_select_pages_is_deterministic(tmp_path):
@@ -129,9 +145,12 @@ def test_select_pages_is_deterministic(tmp_path):
     for c in range(1, 4):
         for i in range(5):
             db.add_note(f"c{c}n{i}", f"c{c}/{i}.md", pagerank=0.1 * c, community_id=c)
+        for i in range(1, 5):
+            db.add_semantic(f"c{c}n0", f"c{c}n{i}")
     first = [s.wiki_relpath for s in select_pages(db, min_community_size=5)]
     second = [s.wiki_relpath for s in select_pages(db, min_community_size=5)]
     assert first == second
+    assert first                                            # coherent -> non-empty
 
 
 def _spec(**kw):
@@ -239,3 +258,126 @@ def test_build_mission_prompt_fair_share_keeps_later_sources(tmp_path):
                                   excerpt_budget=60000)
     assert prompt.count("A") < 100_000                     # first source truncated
     assert "Bravo distinctive marker content." in prompt   # second source intact
+
+
+# --- selection v2: anchors, coherence gate, collisions, candidates ---------
+
+def test_topic_anchor_page_id_and_slug_from_anchor_title(tmp_path):
+    db = _db(tmp_path)
+    # anchor = highest-PageRank member; its title drives slug + page_id
+    db.add_note("hub", "projects/docker.md", 0.9, community_id=1, title="Docker Phoenix")
+    for i in range(4):
+        db.add_note(f"m{i}", f"notes/{i}.md", 0.1, community_id=1, title=f"Member {i}")
+        db.add_semantic("hub", f"m{i}")
+    specs = select_pages(db, min_community_size=5, pagerank_percentile=99.9)
+    topic = next(s for s in specs if s.kind == "topic")
+    assert topic.title == "Docker Phoenix"
+    assert topic.wiki_relpath == "topics/docker-phoenix.md"
+    assert topic.page_id == "topic:projects/docker.md"
+    assert topic.key == "1"
+
+
+def test_coherence_gate_skips_incoherent_community(tmp_path):
+    db = _db(tmp_path)
+    db.add_note("a0", "junk/castle.md", 0.9, community_id=1, title="Castle")
+    for i in range(1, 5):
+        db.add_note(f"a{i}", f"junk/{i}.md", 0.1, community_id=1, title=f"Junk {i}")
+    # no semantic/wikilink edge among members -> fraction 0 < 0.5 -> skipped
+    report = {}
+    specs = select_pages(db, min_community_size=5, pagerank_percentile=99.9,
+                         selection_report=report)
+    assert [s for s in specs if s.kind == "topic"] == []
+    assert "castle" in report["skipped_incoherent"]        # would-be slug reported
+
+
+def test_coherence_gate_counts_undirected_adjacency(tmp_path):
+    db = _db(tmp_path)
+    # ONLY hub->member rows exist. An undirected reading must still count each
+    # member as connected (hub is its neighbor); a src-only reading would give
+    # each member 0 neighbors -> fraction 1/5 = 0.2 < 0.5 and wrongly skip.
+    db.add_note("hub", "topics/hub.md", 0.9, community_id=1, title="Hub")
+    for i in range(4):
+        db.add_note(f"m{i}", f"notes/{i}.md", 0.1, community_id=1, title=f"M{i}")
+        db.add_semantic("hub", f"m{i}")                    # hub -> m{i} only
+    report = {}
+    specs = select_pages(db, min_community_size=5, pagerank_percentile=99.9,
+                         selection_report=report)
+    assert any(s.kind == "topic" for s in specs)
+    assert report["skipped_incoherent"] == []
+
+
+def test_wikilink_only_community_passes_coherence(tmp_path):
+    db = _db(tmp_path)
+    db.add_note("w0", "topics/w0.md", 0.9, community_id=1, title="W0")
+    for i in range(1, 5):
+        db.add_note(f"w{i}", f"notes/{i}.md", 0.1, community_id=1, title=f"W{i}")
+        db.add_wikilink("w0", f"w{i}")                     # wikilink edges only
+    specs = select_pages(db, min_community_size=5, pagerank_percentile=99.9)
+    assert any(s.kind == "topic" for s in specs)           # wikilinks count
+
+
+def test_coherence_threshold_boundary_half_passes(tmp_path):
+    db = _db(tmp_path)
+    for i in range(4):
+        db.add_note(f"m{i}", f"notes/{i}.md", 0.5, community_id=1, title=f"M{i}")
+    db.add_semantic("m0", "m1")                            # exactly 2 of 4 connected
+    specs = select_pages(db, min_community_size=4, pagerank_percentile=99.9)
+    assert any(s.kind == "topic" for s in specs)           # fraction 0.5 >= threshold 0.5
+
+
+def test_cross_kind_slug_collision_suffixed(tmp_path):
+    db = _db(tmp_path)
+    # topic "Foo" from a coherent community
+    db.add_note("t0", "proj/foo.md", 0.9, community_id=1, title="Foo")
+    for i in range(1, 5):
+        db.add_note(f"t{i}", f"proj/{i}.md", 0.1, community_id=1, title=f"T{i}")
+        db.add_semantic("t0", f"t{i}")
+    # entity "Foo": a high-PageRank note outside any qualifying community
+    db.add_note("e0", "people/foo.md", 5.0, title="Foo")
+    specs = select_pages(db, min_community_size=5, pagerank_percentile=90.0)
+    foos = [s for s in specs if s.title == "Foo"]
+    assert len(foos) == 2
+    assert {s.kind for s in foos} == {"topic", "entity"}
+    # one slug namespace across both kinds: topic (selected first) keeps 'foo',
+    # the entity gets '-2' in its own directory -> distinct relpaths, no drop.
+    assert sorted(s.wiki_relpath for s in foos) == ["entities/foo-2.md", "topics/foo.md"]
+
+
+def test_related_candidates_rank_shared_sources_and_zero_overlap(tmp_path):
+    db = _db(tmp_path)
+    # Two coherent communities that share one source note path (distinct node
+    # ids, identical path) -> each lists the other in related_candidates.
+    db.add_note("A0", "shared/common.md", 0.9, community_id=1, title="Alpha")
+    for i in range(1, 5):
+        db.add_note(f"A{i}", f"a/{i}.md", 0.1, community_id=1, title=f"A{i}")
+        db.add_semantic("A0", f"A{i}")
+    db.add_note("B0", "shared/common.md", 0.9, community_id=2, title="Beta")
+    for i in range(1, 5):
+        db.add_note(f"B{i}", f"b/{i}.md", 0.1, community_id=2, title=f"B{i}")
+        db.add_semantic("B0", f"B{i}")
+    # A third coherent community sharing nothing -> zero-overlap page gets []
+    db.add_note("C0", "c/0.md", 0.9, community_id=3, title="Gamma")
+    for i in range(1, 5):
+        db.add_note(f"C{i}", f"c/{i}.md", 0.1, community_id=3, title=f"C{i}")
+        db.add_semantic("C0", f"C{i}")
+    specs = select_pages(db, min_community_size=5, pagerank_percentile=99.9)
+    by_key = {s.key: s for s in specs if s.kind == "topic"}
+    alpha, beta, gamma = by_key["1"], by_key["2"], by_key["3"]
+    assert (beta.wiki_relpath, beta.title) in alpha.related_candidates
+    assert (alpha.wiki_relpath, alpha.title) in beta.related_candidates
+    assert gamma.related_candidates == []
+
+
+def test_related_candidates_capped_at_related_cap(tmp_path):
+    from obsidian_legion.vaultgraph.missions import _RELATED_CAP
+    db = _db(tmp_path)
+    # 10 coherent communities all sharing one common source path: the first
+    # page overlaps 9 others but keeps at most _RELATED_CAP candidates.
+    for c in range(1, 11):
+        db.add_note(f"H{c}", "shared/common.md", 0.9, community_id=c, title=f"Hub{c}")
+        for i in range(1, 5):
+            db.add_note(f"C{c}n{i}", f"c{c}/{i}.md", 0.1, community_id=c, title=f"C{c}m{i}")
+            db.add_semantic(f"H{c}", f"C{c}n{i}")
+    specs = select_pages(db, min_community_size=5, pagerank_percentile=99.9)
+    topic = next(s for s in specs if s.kind == "topic")
+    assert len(topic.related_candidates) == _RELATED_CAP   # 9 overlaps -> capped at 8

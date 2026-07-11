@@ -79,6 +79,18 @@ class FakeGraphDB:
         conn.close()
 
 
+def _wire_community(db, community, n):
+    """Semantic star among a community's members so it clears the R5 v2
+    coherence gate (missions.select_pages, coherence_threshold=0.5)."""
+    conn = sqlite3.connect(db.db_path)
+    for i in range(1, n):
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?,?,?,1.0)",
+            (f"c{community}n0", f"c{community}n{i}", "semantic"))
+    conn.commit()
+    conn.close()
+
+
 def one_topic_db(vault, community=1, n=5):
     db = FakeGraphDB(vault / ".legion" / "graph.sqlite")
     for i in range(n):
@@ -86,6 +98,7 @@ def one_topic_db(vault, community=1, n=5):
         (vault / "notes").mkdir(exist_ok=True)
         (vault / rel).write_text(f"Body of note {i}. Mentions the flame.", encoding="utf-8")
         db.add_note(f"c{community}n{i}", rel, pagerank=0.5, community_id=community)
+    _wire_community(db, community, n)
     return db
 
 
@@ -181,6 +194,7 @@ def test_budget_defers_extra_pages(tmp_path):
             (vault / rel).write_text(f"Note {c}.{i} flame. [[notes/{c}_0.md]]",
                                      encoding="utf-8")
             db.add_note(f"c{c}n{i}", rel, pagerank=float(c), community_id=c)
+        _wire_community(db, c, 5)
     report = WikiWriter(vault, db, FakeChain(GOOD_BODY)).update(budget=1)
     assert report["pages_written"] == 1
     assert report["pages_deferred"] == 2
@@ -252,6 +266,7 @@ def test_wall_clock_budget_defers_remaining(tmp_path, monkeypatch):
             (vault / rel).write_text(f"Note {c}.{i} flame. [[notes/{c}_0.md]]",
                                      encoding="utf-8")
             db.add_note(f"c{c}n{i}", rel, pagerank=float(c), community_id=c)
+        _wire_community(db, c, 5)
 
     # started=0, page-1 check=0 (proceeds), page-2 check=5000 (over budget -> stop)
     ticks = iter([0.0, 0.0, 5000.0])
