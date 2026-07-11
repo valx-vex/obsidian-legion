@@ -102,7 +102,54 @@ def one_topic_db(vault, community=1, n=5):
     return db
 
 
-GOOD_BODY = "## Overview\nThe flame matters. See [[notes/1_0.md]] for detail."
+def VALID_BODY(title="Test Page", link="[[daily/note.md]]", words=130,
+               see_also=None):
+    """A v2-valid mission body: authored H1, lead paragraph, two ## sections
+    citing a wikilink, padded to `words` whitespace tokens, and an optional
+    '## See also' block built from wiki relpaths."""
+    lines = [
+        f"# {title}",
+        "",
+        "This encyclopedic page synthesizes its subject across sources "
+        f"such as {link} and adjacent notes.",
+        "",
+        "## Origins",
+        "",
+        "The material is documented across several grounded notes in the vault.",
+        "",
+        "## Details",
+        "",
+        "Further analysis connects the subject to neighbouring topics.",
+    ]
+    text = "\n".join(lines)
+    pad = words - len(text.split())
+    if pad > 0:
+        text += "\n\n" + " ".join(["context"] * pad)
+    if see_also:
+        text += "\n\n## See also\n\n" + "\n".join(
+            f"- [[wiki/{rel}|{rel}]]" for rel in see_also)
+    return text
+
+
+def v2_page(body, provider="fake"):
+    """Wrap a body in valid v2 frontmatter (all nine _FRONTMATTER_KEYS)."""
+    return (
+        "---\n"
+        "generated_by: legion-wiki\n"
+        'title: "Test Page"\n'
+        'page_id: "topic:notes/a.md"\n'
+        "sources:\n"
+        "  - notes/a.md\n"
+        'community_id: "1"\n'
+        "updated_at: 2026-07-10T00:00:00+00:00\n"
+        "mission_hash: abc123\n"
+        "template_version: v2-encyclo-1\n"
+        f"provider: {provider}\n"
+        "---\n\n"
+    ) + body
+
+
+GOOD_BODY = VALID_BODY()   # v2-valid; existing FakeChain(GOOD_BODY) sites keep working
 
 
 def test_bootstrap_writes_pages_and_index(tmp_path):
