@@ -169,6 +169,10 @@ class WikiWriter:
         blocklist = self._blocklist()
         specs = [s for s in select_pages(self.db, selection_report=sel_report)
                  if s.wiki_relpath not in blocklist]
+        # Relpaths claimed by THIS run's selection. A migrating page must never
+        # unlink its old relpath when another selected page owns it now (slug
+        # handoff foo->bar while a different page claims foo in the same run).
+        selected_relpaths = {s.wiki_relpath for s in specs}
         report["skipped_incoherent"] = sel_report.get("skipped_incoherent", [])
         report["selection_truncated"] = sel_report.get("selection_truncated", 0)
         state = self._load_state()
@@ -237,7 +241,11 @@ class WikiWriter:
                     "updated_at": datetime.now().astimezone().isoformat()}
                 # Relpath migration: the anchor slug changed, so the old
                 # generated file is renamed away (deleted after the new write).
-                if old_relpath and old_relpath != spec.wiki_relpath:
+                # But if another selected page claims the old relpath this run
+                # (slug handoff), leave it alone — that page owns it now or will
+                # rewrite it — otherwise we'd delete its freshly written file.
+                if (old_relpath and old_relpath != spec.wiki_relpath
+                        and old_relpath not in selected_relpaths):
                     old_file = self.wiki_root / old_relpath
                     if old_file.exists() and _is_generated(
                             old_file.read_text(encoding="utf-8", errors="ignore")):

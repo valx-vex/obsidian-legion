@@ -717,6 +717,53 @@ def test_relpath_migration_deletes_old_file_on_rename(tmp_path):
     assert entry["relpath"] == "topics/renamed-anchor.md"
 
 
+def test_migration_unlink_spares_slug_handoff_target(tmp_path):
+    # F2: within ONE run, P1's anchor slug migrates foo -> bar while a DIFFERENT
+    # selected page P2 now claims slug 'foo'. P2 is processed before P1 (equal
+    # score -> ascending community id), so P1's migration unlink must NOT delete
+    # topics/foo.md — that is P2's freshly written page, owned this run.
+    vault = make_vault(tmp_path)
+    db = FakeGraphDB(vault / ".legion" / "graph.sqlite")
+    (vault / "notes").mkdir()
+    for c in range(1, 3):                              # two coherent communities
+        for i in range(5):
+            rel = f"notes/{c}_{i}.md"
+            (vault / rel).write_text(
+                f"Note {c}.{i} about the flame. [[notes/{c}_0.md]]",
+                encoding="utf-8")
+            db.add_note(f"c{c}n{i}", rel, pagerank=0.5, community_id=c)
+        _wire_community(db, c, 5)
+    # anchor titles fix the slugs: community 1 -> 'foo' (P2), community 2 -> 'bar' (P1)
+    conn = sqlite3.connect(db.db_path)
+    conn.execute("UPDATE nodes SET title=? WHERE id=?", ("Foo", "c1n0"))
+    conn.execute("UPDATE nodes SET title=? WHERE id=?", ("Bar", "c2n0"))
+    conn.commit()
+    conn.close()
+
+    topics = vault / "wiki" / "topics"
+    topics.mkdir(parents=True)
+    # P1 (page_id topic:notes/2_0.md) currently lives on disk at topics/foo.md;
+    # this run its slug migrates foo -> bar. Pre-create that file with the
+    # generated marker so reconcile keeps P1's state entry and the unlink is armed.
+    (topics / "foo.md").write_text(
+        _generated_page("Foo (old P1 page)", "topic:notes/2_0.md"),
+        encoding="utf-8")
+    state = {"topic:notes/2_0.md": {"relpath": "topics/foo.md", "sources": {},
+                                    "mission_hash": "old", "provider": "fake",
+                                    "updated_at": "x"}}
+    (vault / ".legion" / "wiki-state.json").write_text(
+        json.dumps(state), encoding="utf-8")
+
+    report = WikiWriter(vault, db, FakeChain(GOOD_BODY)).update()
+    assert report["pages_written"] == 2
+    assert (topics / "foo.md").exists()        # P2's handoff target NOT deleted
+    assert (topics / "bar.md").exists()        # P1 migrated to its new slug
+    state_after = json.loads((vault / ".legion" / "wiki-state.json").read_text())
+    assert state_after["topic:notes/1_0.md"]["relpath"] == "topics/foo.md"   # P2
+    assert state_after["topic:notes/2_0.md"]["relpath"] == "topics/bar.md"   # P1
+    assert len(state_after) == 2
+
+
 def test_reconcile_see_also_prunes_dead_keeps_live(tmp_path):
     vault = make_vault(tmp_path)
     writer = WikiWriter(vault, FakeGraphDB(vault / ".legion" / "graph.sqlite"),
