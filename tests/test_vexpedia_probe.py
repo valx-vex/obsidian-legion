@@ -212,6 +212,111 @@ def test_mobile_dest_extra_file_fails(tmp_path):
     assert any("topics/extra.md" in m for m in messages)
 
 
+# --- Fix 1: anchored intra-wiki links must strip the #fragment ---
+
+
+def test_deadlinks_anchored_link_resolving_passes(tmp_path):
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    _write_page(wiki, "topics/a.md",
+                body="# A\n\nSee [[wiki/topics/b.md#Some-Heading|B]].")
+    _write_page(wiki, "topics/b.md", body="# B\n\nBody.")
+    ok, messages = probe.probe_deadlinks(vault)
+    assert ok is True
+
+
+def test_deadlinks_anchored_link_missing_target_fails(tmp_path):
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    _write_page(wiki, "topics/a.md",
+                body="# A\n\nSee [[wiki/topics/gone.md#Some-Heading|G]].")
+    ok, messages = probe.probe_deadlinks(vault)
+    assert ok is False
+    assert any("gone.md" in m for m in messages)
+
+
+def test_index_anchored_link_matches(tmp_path):
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    _write_page(wiki, "topics/b.md", body="# B\n\nBody.")
+    _write_index(wiki, ["topics/b.md#Some-Heading"])
+    ok, messages = probe.probe_index(vault)
+    assert ok is True
+    assert any("exact match" in m for m in messages)
+
+
+# --- Fix 2: empty/missing dirs must FAIL, not vacuously pass ---
+
+
+def test_corruption_missing_dir_fails(tmp_path):
+    ok, messages = probe.probe_corruption(tmp_path / "does-not-exist")
+    assert ok is False
+    assert any("no .md files found" in m for m in messages)
+
+
+def test_corruption_empty_dir_fails(tmp_path):
+    (tmp_path / "empty").mkdir()
+    ok, messages = probe.probe_corruption(tmp_path / "empty")
+    assert ok is False
+    assert any("no .md files found" in m for m in messages)
+
+
+def test_mobile_empty_source_fails(tmp_path):
+    src = tmp_path / "src"
+    dest = tmp_path / "dest"
+    _write_page(dest / "wiki", "topics/a.md", body="# A\n\nBody.")
+    ok, messages = probe.probe_mobile(src, dest)
+    assert ok is False
+    assert any("no pages" in m for m in messages)
+
+
+# --- Fix 3: private stem match is word-bounded and only for len >= 4 ---
+
+
+def test_privacy_short_stem_word_does_not_fire(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / ".murphy_private").mkdir(parents=True)
+    (vault / ".murphy_private" / "a.md").write_text("private", encoding="utf-8")
+    _write_page(vault / "wiki", "topics/clean.md", sources=["docs/pub.md"],
+                body="# Clean\n\nThis is a perfectly clean public page.")
+    ok, messages = probe.probe_privacy(vault)
+    assert ok is True
+
+
+def test_privacy_whole_word_stem_fires(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / ".murphy_private").mkdir(parents=True)
+    (vault / ".murphy_private" / "notes.md").write_text(
+        "private", encoding="utf-8")
+    _write_page(vault / "wiki", "topics/a.md", sources=["docs/pub.md"],
+                body="# A\n\nThese are my notes for today.")
+    ok, messages = probe.probe_privacy(vault)
+    assert ok is False
+    assert any("notes" in m for m in messages)
+
+
+def test_privacy_stem_boundary_ignores_superstrings(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / ".murphy_private").mkdir(parents=True)
+    (vault / ".murphy_private" / "notes.md").write_text(
+        "private", encoding="utf-8")
+    _write_page(vault / "wiki", "topics/a.md", sources=["docs/pub.md"],
+                body="# A\n\nSee the footnotes and the field-notes section.")
+    ok, messages = probe.probe_privacy(vault)
+    assert ok is True
+
+
+def test_privacy_basename_literal_still_fires(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / ".murphy_private").mkdir(parents=True)
+    (vault / ".murphy_private" / "a.md").write_text("private", encoding="utf-8")
+    _write_page(vault / "wiki", "topics/x.md", sources=["docs/pub.md"],
+                body="# X\n\nReference to a.md appears literally here.")
+    ok, messages = probe.probe_privacy(vault)
+    assert ok is False
+    assert any("a.md" in m for m in messages)
+
+
 def test_main_exit_codes(tmp_path):
     (tmp_path / "clean.md").write_text("# A\n\nClean prose.", encoding="utf-8")
     assert probe.main(["corruption", str(tmp_path)]) == 0     # pass -> 0

@@ -21,9 +21,13 @@ _PRIVATE = ".murphy_private"
 def probe_corruption(directory) -> tuple[bool, list[str]]:
     """Fail on capture-corruption markers in any .md under directory (recursive)."""
     root = Path(directory)
+    md_files = sorted(root.rglob("*.md")) if root.exists() else []
+    if not md_files:
+        return False, [
+            f"corruption: no .md files found under {root} (nothing to verify)"]
     ok = True
     messages: list[str] = []
-    for md in sorted(root.rglob("*.md")):
+    for md in md_files:
         text = md.read_text(encoding="utf-8", errors="replace")
         if "\x1b" in text:
             ok = False
@@ -74,25 +78,32 @@ def _parse_sources(frontmatter: str) -> list[str]:
     return sources
 
 
-def _private_names(vault_root: Path) -> set[str]:
-    """Basenames AND stems of every file under any `.murphy_private` dir."""
-    names: set[str] = set()
+def _private_names(vault_root: Path) -> tuple[set[str], set[str]]:
+    """(basenames, stems) of every file under any `.murphy_private` dir.
+
+    Basenames carry an extension and stay specific, so they match as plain
+    substrings. Stems are bare words and match only word-bounded (see the
+    caller), to keep short/common stems from false-tripping the gate.
+    """
+    basenames: set[str] = set()
+    stems: set[str] = set()
     for private_dir in vault_root.rglob(_PRIVATE):
         if not private_dir.is_dir():
             continue
         for f in private_dir.rglob("*"):
             if f.is_file():
-                names.add(f.name)
-                names.add(f.stem)
-    names.discard("")
-    return names
+                basenames.add(f.name)
+                stems.add(f.stem)
+    basenames.discard("")
+    stems.discard("")
+    return basenames, stems
 
 
 def probe_privacy(vault_root) -> tuple[bool, list[str]]:
     """Three-part content-surface privacy probe (spec §9.6)."""
     root = Path(vault_root)
     wiki = root / "wiki"
-    private_names = _private_names(root)
+    private_basenames, private_stems = _private_names(root)
     ok = True
     messages: list[str] = []
     for md in sorted(wiki.rglob("*.md")):
@@ -104,11 +115,22 @@ def probe_privacy(vault_root) -> tuple[bool, list[str]]:
             if _PRIVATE in src:
                 ok = False
                 messages.append(f"{md}: private source listed: {src}")
-        # (b) no private basename/stem may surface anywhere in the page
-        for name in private_names:
+        # (b) no private name may surface anywhere in the page. Basenames carry
+        # an extension (specific) -> plain substring; stems are bare words ->
+        # word-bounded and only when >= 4 chars, so short/common stems (e.g.
+        # 'a', 'notes' inside 'footnotes'/'field-notes') do not false-trip.
+        for name in private_basenames:
             if name in text:
                 ok = False
                 messages.append(f"{md}: private name surfaced: {name}")
+        for stem in private_stems:
+            if len(stem) < 4:
+                continue
+            if re.search(
+                    rf"(?<![0-9A-Za-z_-]){re.escape(stem)}(?![0-9A-Za-z_-])",
+                    text):
+                ok = False
+                messages.append(f"{md}: private name surfaced: {stem}")
         # (c) a literal .murphy_private in the body must trace to a listed source
         if _PRIVATE in body:
             traceable = False
@@ -154,8 +176,13 @@ def probe_index(vault_root) -> tuple[bool, list[str]]:
     index = wiki / "index.md"
     if not index.exists():
         return False, [f"index: missing {index}"]
-    listed = set(_WIKI_LINK_RE.findall(
-        index.read_text(encoding="utf-8", errors="replace")))
+    # Strip the #fragment: anchored links (topics/b.md#Heading) resolve to the
+    # same page as the bare link, matching WikiWriter's own link grammar.
+    listed = {
+        captured.split("#", 1)[0]
+        for captured in _WIKI_LINK_RE.findall(
+            index.read_text(encoding="utf-8", errors="replace"))
+    }
     on_disk = _generated_disk_pages(wiki)
     ghost = listed - on_disk
     missing = on_disk - listed
@@ -184,7 +211,10 @@ def probe_deadlinks(vault_root) -> tuple[bool, list[str]]:
             text = page.read_text(encoding="utf-8", errors="replace")
             if not _is_generated(text):
                 continue
-            for target in _WIKI_LINK_RE.findall(text):
+            for captured in _WIKI_LINK_RE.findall(text):
+                # Strip the #fragment before resolving: an anchor points into a
+                # page, not at a separate file (mirrors WikiWriter's grammar).
+                target = captured.split("#", 1)[0]
                 if not (wiki / target).exists():
                     ok = False
                     messages.append(
@@ -204,6 +234,8 @@ def _wiki_relpaths(vault_root: Path) -> set[str]:
 def probe_mobile(src_vault, dest_vault) -> tuple[bool, list[str]]:
     """The set of wiki/**.md relpaths must be identical on both sides."""
     src = _wiki_relpaths(Path(src_vault))
+    if not src:
+        return False, ["mobile: source wiki has no pages (nothing to verify)"]
     dest = _wiki_relpaths(Path(dest_vault))
     missing = src - dest
     extra = dest - src
