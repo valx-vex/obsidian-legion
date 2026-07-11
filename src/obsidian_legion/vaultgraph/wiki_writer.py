@@ -26,6 +26,17 @@ from .missions import (
 _FRONTMATTER_KEYS = ("generated_by", "sources", "community_id",
                      "updated_at", "mission_hash")
 _GENERATED_MARKER = "generated_by: legion-wiki"
+_GENERATED_LINE_RE = re.compile(r"^generated_by: legion-wiki\s*$", re.MULTILINE)
+
+
+def _is_generated(text: str) -> bool:
+    """True iff `text` carries the anchored legion-wiki generated marker.
+
+    Anchored to a whole frontmatter line so bake-off markers
+    ('generated_by: vexpedia-bakeoff') and superstrings
+    ('generated_by: legion-wiki-bakeoff') never match.
+    """
+    return bool(_GENERATED_LINE_RE.search(text))
 
 
 class WikiWriter:
@@ -138,7 +149,7 @@ class WikiWriter:
             directory = self.wiki_root / sub
             if directory.exists():
                 for page in directory.glob("*.md"):
-                    if _GENERATED_MARKER in page.read_text(encoding="utf-8", errors="ignore"):
+                    if _is_generated(page.read_text(encoding="utf-8", errors="ignore")):
                         page.unlink()
                         removed += 1
         index = self.wiki_root / "index.md"

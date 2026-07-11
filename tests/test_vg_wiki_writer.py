@@ -369,3 +369,32 @@ def test_write_index_is_deterministic(tmp_path):
     assert first == second
     assert "Topics" in first and "Entities" in first
     assert "Alpha" in first and "Beta" in first
+
+
+def test_is_generated_marker_is_anchored(tmp_path):
+    from obsidian_legion.vaultgraph.wiki_writer import _is_generated
+    assert _is_generated("---\ngenerated_by: legion-wiki\n---\nbody") is True
+    # bake-off pages must NOT be treated as legion-wiki pages
+    assert _is_generated("---\ngenerated_by: vexpedia-bakeoff\n---\nb") is False
+    # a superstring value must not match either (the v1 substring bug)
+    assert _is_generated("---\ngenerated_by: legion-wiki-bakeoff\n---\nb") is False
+
+
+def test_reset_leaves_non_generated_pages_alone(tmp_path):
+    vault = make_vault(tmp_path)
+    db = one_topic_db(vault)
+    writer = WikiWriter(vault, db, FakeChain(VALID_BODY()))
+    writer.update(bootstrap=True)
+    topics = vault / "wiki" / "topics"
+    decoy_bakeoff = topics / "_decoy_bakeoff.md"
+    decoy_bakeoff.write_text(
+        "---\ngenerated_by: vexpedia-bakeoff\ntitle: \"x\"\n---\n# X\n\n[[a.md]]",
+        encoding="utf-8")
+    decoy_superstring = topics / "_decoy_superstring.md"
+    decoy_superstring.write_text(
+        "---\ngenerated_by: legion-wiki-bakeoff\n---\n# Y\n\n[[a.md]]",
+        encoding="utf-8")
+    result = writer.reset()
+    assert result["pages_removed"] >= 1          # the real generated page went
+    assert decoy_bakeoff.exists()                # bake-off marker survives
+    assert decoy_superstring.exists()            # superstring marker survives
