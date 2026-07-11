@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 
 from obsidian_legion.vaultgraph.missions import (
-    PageSpec, build_mission_prompt, select_pages,
+    PageSpec, build_mission_prompt, select_pages, _fair_share,
 )
 
 
@@ -146,11 +146,12 @@ def test_build_mission_prompt_embeds_openwiki_rules(tmp_path):
     (tmp_path / "b.md").write_text("Note B.", encoding="utf-8")
     prompt = build_mission_prompt(_spec(), tmp_path, existing_page=None)
     lowered = prompt.lower()
-    assert "never invent" in lowered
+    assert "never invent" in lowered                       # v1 grounding kept
     assert "[[wikilink" in lowered or "[[source" in lowered
-    assert "thin page" in lowered
+    assert "synthesize" in lowered                         # v2 rule 4
+    assert "see also" in lowered                            # v2 rules 3 & 6
     assert "The Sacred Flame" in prompt
-    assert "Note A about the flame" in prompt              # grounding excerpt present
+    assert "Note A about the flame" in prompt               # grounding excerpt present
     assert "SURGICAL" not in prompt                         # create mode, not update
 
 
@@ -169,3 +170,72 @@ def test_build_mission_prompt_trims_to_excerpt_budget(tmp_path):
     prompt = build_mission_prompt(_spec(), tmp_path, existing_page=None,
                                   excerpt_budget=1000)
     assert prompt.count("A") + prompt.count("B") <= 1000 + 50  # grounding trimmed
+
+
+# --- fair-share water-filling (R5 v2 §5.3) ---------------------------------
+
+def test_fair_share_normative_example():
+    # water-filling: share = 60000 // 4 = 15000 -> 500 and 200 satisfied
+    #   (remaining 59300); next share = 59300 // 2 = 29650 satisfies nobody,
+    #   so both long sources get 29650 each; residue 59300 - 29650*2 = 0.
+    assert _fair_share([500, 40000, 40000, 200], 60000) == [500, 29650, 29650, 200]
+
+
+def test_fair_share_empty():
+    assert _fair_share([], 60000) == []
+
+
+def test_fair_share_single_source():
+    # one source shorter than the whole budget is satisfied at its length
+    assert _fair_share([100], 60000) == [100]
+
+
+def test_fair_share_all_tiny_sources_under_budget():
+    # sum(10+20+30) = 60 <= 1000 ; every source satisfied at its length,
+    # the leftover budget is simply never handed out.
+    result = _fair_share([10, 20, 30], 1000)
+    assert result == [10, 20, 30]
+    assert sum(result) <= 1000
+
+
+def test_fair_share_residue_goes_to_first():
+    # 3 long sources, none satisfiable by the equal share:
+    #   share = 20000 // 3 = 6666 ; residue = 20000 - 6666*3 = 20000 - 19998 = 2
+    #   residue (< n_remaining = 3) goes to the FIRST (highest-PageRank) source.
+    result = _fair_share([10000, 10000, 10000], 20000)
+    assert result == [6668, 6666, 6666]
+    assert sum(result) <= 20000
+
+
+# --- prompt v2: RELATED PAGES + fair-share grounding -----------------------
+
+def test_build_mission_prompt_includes_related_pages_when_candidates_present(tmp_path):
+    (tmp_path / "a.md").write_text("Note A. [[b]]", encoding="utf-8")
+    (tmp_path / "b.md").write_text("Note B.", encoding="utf-8")
+    spec = _spec(related_candidates=[("topics/foo.md", "Foo"),
+                                     ("entities/bar.md", "Bar")])
+    prompt = build_mission_prompt(spec, tmp_path, existing_page=None)
+    assert "## RELATED PAGES (candidates for See also):" in prompt
+    assert "- [[wiki/topics/foo.md|Foo]]" in prompt
+    assert "- [[wiki/entities/bar.md|Bar]]" in prompt
+
+
+def test_build_mission_prompt_omits_related_pages_when_no_candidates(tmp_path):
+    (tmp_path / "a.md").write_text("Note A.", encoding="utf-8")
+    (tmp_path / "b.md").write_text("Note B.", encoding="utf-8")
+    prompt = build_mission_prompt(_spec(), tmp_path, existing_page=None)
+    # The candidate BLOCK is omitted; the phrase "RELATED PAGES" still occurs in
+    # the always-present MISSION_RULES (rule 6) and TASK prose, so guard on the
+    # exact block header (the negation of the positive test's assertion).
+    assert "## RELATED PAGES (candidates for See also):" not in prompt
+
+
+def test_build_mission_prompt_fair_share_keeps_later_sources(tmp_path):
+    # A 100k-char first note is truncated to its fair share, but the short
+    # second source survives in full (v1's PageRank-order fill would starve it).
+    (tmp_path / "a.md").write_text("A" * 100_000, encoding="utf-8")
+    (tmp_path / "b.md").write_text("Bravo distinctive marker content.", encoding="utf-8")
+    prompt = build_mission_prompt(_spec(), tmp_path, existing_page=None,
+                                  excerpt_budget=60000)
+    assert prompt.count("A") < 100_000                     # first source truncated
+    assert "Bravo distinctive marker content." in prompt   # second source intact
