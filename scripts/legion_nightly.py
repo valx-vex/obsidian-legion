@@ -18,17 +18,21 @@ import sys
 import traceback
 from pathlib import Path
 
+SKIP_GRAPH_REASON = "--skip-graph"
+
 
 def should_run_wiki(graph_report: dict):
     """Decide whether the wiki phase may run given the graph phase's report.
 
-    Skip the wiki phase when the graph phase itself was skipped (e.g. another
-    rebuild holds the lock: {"skipped": "already_running"}) — otherwise the
-    wiki writer could run concurrently with an in-progress graph rebuild.
-    Returns (run: bool, skip_reason: str | None).
+    Skip the wiki phase when the graph phase was skipped by lock contention
+    (another rebuild holds the lock: {"skipped": "already_running"}) — the wiki
+    writer must not run concurrently with an in-progress graph rebuild. The
+    supervised-drain flag --skip-graph (SKIP_GRAPH_REASON) is the ONE exception:
+    it bypasses the graph phase deliberately and the wiki phase must still run
+    (R5 §8.3a). Returns (run: bool, skip_reason: str | None).
     """
     reason = graph_report.get("skipped")
-    if reason:
+    if reason and reason != SKIP_GRAPH_REASON:
         return False, str(reason)
     return True, None
 
@@ -50,6 +54,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Legion nightly graph + wiki job")
     parser.add_argument("--vault", default="", help="registry name or absolute path")
     parser.add_argument("--skip-wiki", action="store_true")
+    parser.add_argument("--skip-graph", action="store_true",
+                        help="bypass the graph phase and run the wiki phase "
+                             "directly (supervised drain, R5 §8.3)")
     parser.add_argument("--budget", type=int, default=25)
     parser.add_argument("--max-wall", type=int, default=1800,
                         help="wiki-phase wall-clock budget in seconds")
@@ -61,14 +68,19 @@ def main(argv=None) -> int:
     vault_name, vault_root = _resolve_vault(args.vault)
 
     graph_ok = True
-    try:
-        graph_report = GraphBuilder(vault_root).update()
-        if graph_report.get("error"):
+    if args.skip_graph:
+        # Graph phase bypassed on purpose; present a healthy report so the wiki
+        # phase runs (should_run_wiki whitelists SKIP_GRAPH_REASON).
+        graph_report = {"skipped": SKIP_GRAPH_REASON}
+    else:
+        try:
+            graph_report = GraphBuilder(vault_root).update()
+            if graph_report.get("error"):
+                graph_ok = False
+        except Exception as exc:
+            traceback.print_exc()
+            graph_report = {"error": f"{type(exc).__name__}: {exc}"}
             graph_ok = False
-    except Exception as exc:
-        traceback.print_exc()
-        graph_report = {"error": f"{type(exc).__name__}: {exc}"}
-        graph_ok = False
 
     wiki_report = None
     run_wiki, skip_reason = should_run_wiki(graph_report)
@@ -80,10 +92,10 @@ def main(argv=None) -> int:
         try:
             from obsidian_legion.vaultgraph.graphdb import GraphDB
             from obsidian_legion.vaultgraph.providers import (
-                ProviderChain, default_providers)
+                ProviderChain, wiki_providers)
             from obsidian_legion.vaultgraph.wiki_writer import WikiWriter
 
-            chain = ProviderChain(default_providers())
+            chain = ProviderChain(wiki_providers())
             if any(chain.preflight().values()):
                 db = GraphDB(vault_root / ".legion" / "graph.sqlite")
                 wiki_report = WikiWriter(vault_root, db, chain).update(

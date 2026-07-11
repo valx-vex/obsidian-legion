@@ -436,6 +436,80 @@ def test_nightly_skips_wiki_when_graph_skipped():
     assert run_ok is True and reason_ok is None
 
 
+def test_should_run_wiki_allows_skip_graph_reason():
+    nightly = _load_nightly()
+    # A graph phase bypassed via --skip-graph presents a healthy report to the
+    # wiki phase: the wiki MUST still run (R5 §8.3a).
+    run, reason = nightly.should_run_wiki({"skipped": nightly.SKIP_GRAPH_REASON})
+    assert run is True and reason is None
+    # Lock-contention skip (another rebuild holds the lock) still blocks the
+    # wiki phase — existing safety behavior preserved.
+    blocked, why = nightly.should_run_wiki({"skipped": "already_running"})
+    assert blocked is False and why == "already_running"
+
+
+def test_nightly_skip_graph_runs_wiki_skip_wiki_skips(tmp_path, monkeypatch):
+    import obsidian_legion.vaultgraph.builder as builder_mod
+    import obsidian_legion.vaultgraph.graphdb as graphdb_mod
+    import obsidian_legion.vaultgraph.providers as providers_mod
+    import obsidian_legion.vaultgraph.wiki_writer as writer_mod
+    from obsidian_legion.vaultgraph import report as report_mod
+
+    nightly = _load_nightly()
+    graph_calls = []
+    wiki_calls = []
+
+    class FakeBuilder:
+        def __init__(self, root):
+            graph_calls.append(root)
+
+        def update(self):
+            return {"notes_seen": 1, "changed": 0}
+
+    class FakeWriter:
+        def __init__(self, root, db, chain):
+            self.root = root
+
+        def update(self, budget=25, max_wall_s=1800):
+            wiki_calls.append((budget, max_wall_s))
+            return {"pages_written": 1, "pages_skipped": 0, "pages_deferred": 0,
+                    "pages_failed": 0, "noop": False, "provider_fates": {}}
+
+    class FakeChain:
+        def __init__(self, providers):
+            self.providers = providers
+
+        def preflight(self):
+            return {"ollama": True}
+
+    class FakeDB:
+        def __init__(self, path):
+            self.path = path
+
+    monkeypatch.setattr(nightly, "_resolve_vault",
+                        lambda arg: ("testvault", tmp_path))
+    monkeypatch.setattr(builder_mod, "GraphBuilder", FakeBuilder)
+    monkeypatch.setattr(writer_mod, "WikiWriter", FakeWriter)
+    monkeypatch.setattr(graphdb_mod, "GraphDB", FakeDB)
+    monkeypatch.setattr(providers_mod, "ProviderChain", FakeChain)
+    monkeypatch.setattr(providers_mod, "wiki_providers",
+                        lambda: [{"name": "ollama", "kind": "http"}])
+    monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "legion")
+
+    # --skip-graph: graph phase bypassed, wiki phase runs.
+    rc = nightly.main(["--skip-graph"])
+    assert rc == 0
+    assert graph_calls == []            # GraphBuilder never instantiated
+    assert len(wiki_calls) == 1         # WikiWriter.update ran once
+
+    # --skip-graph --skip-wiki: wiki phase does NOT run.
+    wiki_calls.clear()
+    rc2 = nightly.main(["--skip-graph", "--skip-wiki"])
+    assert rc2 == 0
+    assert graph_calls == []
+    assert wiki_calls == []             # wiki skipped by --skip-wiki
+
+
 def test_wall_clock_budget_defers_remaining(tmp_path, monkeypatch):
     vault = make_vault(tmp_path)
     db = FakeGraphDB(vault / ".legion" / "graph.sqlite")
