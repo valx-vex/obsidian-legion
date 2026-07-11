@@ -41,6 +41,90 @@ def _is_generated(text: str) -> bool:
     return bool(_GENERATED_LINE_RE.search(text))
 
 
+_TITLE_LINE_RE = re.compile(r'^title:\s*"(.*)"\s*$', re.MULTILINE)
+_SOURCES_LINE_RE = re.compile(r"^sources:\s*$")
+_SEE_ALSO_HEADER_RE = re.compile(r"^##\s+See also\s*$", re.IGNORECASE)
+_WIKI_LINK_RE = re.compile(r"\[\[(wiki/[^\]|#]+)")
+
+
+def _frontmatter_block(text: str) -> str:
+    """Return the YAML frontmatter (between the first two '---'), or ''."""
+    if not text.lstrip().startswith("---"):
+        return ""
+    parts = text.split("---")
+    return parts[1] if len(parts) >= 3 else ""
+
+
+def _unescape_yaml(value: str) -> str:
+    """Reverse yaml_quote's escaping of a double-quoted scalar body."""
+    out: list[str] = []
+    i = 0
+    while i < len(value):
+        char = value[i]
+        if char == "\\" and i + 1 < len(value):
+            out.append(value[i + 1])
+            i += 2
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out)
+
+
+def _parse_title(text: str) -> str | None:
+    match = _TITLE_LINE_RE.search(_frontmatter_block(text))
+    if not match:
+        return None
+    return _unescape_yaml(match.group(1))
+
+
+def _count_sources(text: str) -> int:
+    count = 0
+    in_sources = False
+    for line in _frontmatter_block(text).splitlines():
+        if _SOURCES_LINE_RE.match(line):
+            in_sources = True
+            continue
+        if in_sources:
+            if line.startswith("  - "):
+                count += 1
+            elif line and not line[0].isspace():
+                break
+    return count
+
+
+def _reconcile_see_also_text(text: str, vault_root: Path):
+    """Prune dead [[wiki/...]] bullets from the first '## See also' section.
+
+    Returns (new_text, links_pruned, sections_removed). Only the See-also
+    section is touched; dead links elsewhere in the body are left alone.
+    """
+    lines = text.split("\n")
+    start = None
+    for i, line in enumerate(lines):
+        if _SEE_ALSO_HEADER_RE.match(line):
+            start = i
+            break
+    if start is None:
+        return text, 0, 0
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if lines[j].startswith("## "):
+            end = j
+            break
+    header, section, tail = lines[:start], lines[start:end], lines[end:]
+    pruned = 0
+    kept = [section[0]]                       # the '## See also' header line
+    for line in section[1:]:
+        match = _WIKI_LINK_RE.search(line)
+        if match and not (vault_root / match.group(1)).exists():
+            pruned += 1
+            continue
+        kept.append(line)
+    if any("[[" in ln for ln in kept[1:]):
+        return "\n".join(header + kept + tail), pruned, 0
+    return "\n".join(header + tail), pruned, 1
+
+
 class WikiWriter:
     def __init__(self, vault_root, db, chain, state_path=None) -> None:
         self.vault_root = Path(vault_root)
@@ -168,7 +252,7 @@ class WikiWriter:
             report["pages_deferred"] += len(to_write) - processed
 
         self._save_state(state)
-        self.write_index(specs)
+        self.write_index()
         report["provider_fates"] = fates
         report["stale_pages"] = self._count_stale(state)
         return report
@@ -192,27 +276,36 @@ class WikiWriter:
             state_removed = True
         return {"pages_removed": removed, "state_removed": state_removed}
 
-    def write_index(self, specs: list[PageSpec]) -> Path:
-        topics = sorted((s for s in specs if s.kind == "topic"),
-                        key=lambda s: s.wiki_relpath)
-        entities = sorted((s for s in specs if s.kind == "entity"),
-                          key=lambda s: s.wiki_relpath)
+    def write_index(self) -> Path:
         lines = ["# VEXPEDIA",
                  "",
                  "_Auto-generated index (no LLM). Regenerated when the page set changes._",
                  ""]
-        for label, group in (("Topics", topics), ("Entities", entities)):
+        for label, sub in (("Topics", "topics"), ("Entities", "entities")):
             lines.append(f"## {label}")
             lines.append("")
             lines.append("| Page | Sources |")
             lines.append("|---|---|")
-            for spec in group:
-                lines.append(f"| [[wiki/{spec.wiki_relpath}\\|{spec.title}]] "
-                             f"| {len(spec.source_relpaths)} |")
+            for relpath, title, n_sources in self._index_entries(sub):
+                lines.append(f"| [[wiki/{relpath}\\|{title}]] | {n_sources} |")
             lines.append("")
         index = self.wiki_root / "index.md"
         _atomic_write(index, "\n".join(lines) + "\n")
         return index
+
+    def _index_entries(self, sub: str) -> list[tuple[str, str, int]]:
+        directory = self.wiki_root / sub
+        if not directory.exists():
+            return []
+        entries: list[tuple[str, str, int]] = []
+        for page in sorted(directory.glob("*.md")):
+            text = page.read_text(encoding="utf-8", errors="ignore")
+            if not _is_generated(text):
+                continue
+            relpath = f"{sub}/{page.name}"
+            title = _parse_title(text) or page.stem
+            entries.append((relpath, title, _count_sources(text)))
+        return entries
 
     def validate_page(self, text: str, *, kind: str = "", n_sources: int = 0,
                       candidates_provided: bool = False) -> bool:

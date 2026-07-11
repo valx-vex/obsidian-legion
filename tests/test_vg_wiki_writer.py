@@ -152,6 +152,24 @@ def v2_page(body, provider="fake"):
 GOOD_BODY = VALID_BODY()   # v2-valid; existing FakeChain(GOOD_BODY) sites keep working
 
 
+def _generated_page(title, page_id, body="Body with a [[wiki/topics/x.md|X]] link."):
+    return (
+        "---\n"
+        "generated_by: legion-wiki\n"
+        f'title: "{title}"\n'
+        f'page_id: "{page_id}"\n'
+        "sources:\n"
+        "  - notes/x.md\n"
+        'community_id: ""\n'
+        "updated_at: 2026-07-10T00:00:00\n"
+        "mission_hash: deadbeef\n"
+        "template_version: v2-encyclo-1\n"
+        "provider: fake\n"
+        "---\n"
+        f"# {title}\n\n{body}\n"
+    )
+
+
 def test_bootstrap_writes_pages_and_index(tmp_path):
     vault = make_vault(tmp_path)
     db = one_topic_db(vault)
@@ -476,14 +494,62 @@ def test_pages_written_atomically(tmp_path, monkeypatch):
 
 def test_write_index_is_deterministic(tmp_path):
     vault = make_vault(tmp_path)
-    writer = WikiWriter(vault, one_topic_db(vault), FakeChain(GOOD_BODY))
-    specs = [PageSpec("topic", "1", "topics/b.md", "Beta", ["x.md"]),
-             PageSpec("entity", "n1", "entities/a.md", "Alpha", ["y.md"])]
-    first = writer.write_index(specs).read_text()
-    second = writer.write_index(specs).read_text()
+    writer = WikiWriter(vault, FakeGraphDB(vault / ".legion" / "graph.sqlite"),
+                        FakeChain(GOOD_BODY))
+    topics = vault / "wiki" / "topics"
+    entities = vault / "wiki" / "entities"
+    topics.mkdir(parents=True)
+    entities.mkdir(parents=True)
+    (topics / "beta.md").write_text(_generated_page("Beta", "topic:beta"),
+                                    encoding="utf-8")
+    (entities / "alpha.md").write_text(_generated_page("Alpha", "entity:alpha"),
+                                       encoding="utf-8")
+    first = writer.write_index().read_text()
+    second = writer.write_index().read_text()
     assert first == second
     assert "Topics" in first and "Entities" in first
     assert "Alpha" in first and "Beta" in first
+
+
+def test_write_index_scans_disk_truth(tmp_path):
+    vault = make_vault(tmp_path)
+    writer = WikiWriter(vault, FakeGraphDB(vault / ".legion" / "graph.sqlite"),
+                        FakeChain(GOOD_BODY))
+    topics = vault / "wiki" / "topics"
+    entities = vault / "wiki" / "entities"
+    topics.mkdir(parents=True)
+    entities.mkdir(parents=True)
+    # disk truth: an orphan generated file (never referenced by state) still appears
+    (topics / "orphan.md").write_text(
+        _generated_page("Orphan Topic", "topic:orphan"), encoding="utf-8")
+    (entities / "someone.md").write_text(
+        _generated_page("Someone", "entity:someone"), encoding="utf-8")
+    # YAML-quoted title with a colon + escaped inner quotes, and two sources
+    (topics / "tricky.md").write_text(
+        "---\ngenerated_by: legion-wiki\n"
+        'title: "A: \\"quoted\\" title"\n'
+        'page_id: "topic:tricky"\nsources:\n  - notes/a.md\n  - notes/b.md\n'
+        'community_id: "2"\nupdated_at: x\nmission_hash: h\n'
+        "template_version: v2-encyclo-1\nprovider: fake\n---\n# X\n\nBody [[wiki/z]].\n",
+        encoding="utf-8")
+    # a _bakeoff/ file must NOT appear (non-recursive glob + non-legion marker)
+    bake = vault / "wiki" / "_bakeoff" / "m"
+    bake.mkdir(parents=True)
+    (bake / "orphan.md").write_text(
+        '---\ngenerated_by: vexpedia-bakeoff\ntitle: "Bake"\n---\n# Bake\n',
+        encoding="utf-8")
+    # a non-generated hand-written .md must NOT appear
+    (topics / "hand.md").write_text("# Hand written\n\nNope.\n", encoding="utf-8")
+
+    text = writer.write_index().read_text(encoding="utf-8")
+    assert "Orphan Topic" in text
+    assert "Someone" in text
+    assert "[[wiki/topics/orphan.md\\|Orphan Topic]]" in text
+    assert 'A: "quoted" title' in text          # YAML title unescaped
+    assert "| 2 |" in text                       # tricky page source count
+    assert "Bake" not in text                    # _bakeoff excluded (non-recursive)
+    assert "Hand written" not in text            # non-generated excluded
+    assert text.index("orphan.md") < text.index("tricky.md")   # deterministic order
 
 
 def test_is_generated_marker_is_anchored(tmp_path):
