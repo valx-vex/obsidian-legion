@@ -513,3 +513,65 @@ def test_reset_leaves_non_generated_pages_alone(tmp_path):
     assert result["pages_removed"] >= 1          # the real generated page went
     assert decoy_bakeoff.exists()                # bake-off marker survives
     assert decoy_superstring.exists()            # superstring marker survives
+
+
+def test_state_is_keyed_by_page_id_and_records_provider(tmp_path):
+    vault = make_vault(tmp_path)
+    db = one_topic_db(vault)
+    report = WikiWriter(vault, db, FakeChain(VALID_BODY())).update(bootstrap=True)
+    assert report["pages_written"] == 1
+    assert report["pages_by_provider"] == {"fake": 1}
+    state = json.loads((vault / ".legion" / "wiki-state.json").read_text())
+    assert len(state) == 1
+    (page_id, entry), = state.items()
+    assert page_id.startswith("topic:")
+    assert entry["relpath"].startswith("topics/")
+    assert entry["provider"] == "fake"
+    assert "sources" in entry and "mission_hash" in entry and "updated_at" in entry
+
+
+def test_report_merges_selection_report_keys(tmp_path):
+    vault = make_vault(tmp_path)
+    db = one_topic_db(vault)
+    report = WikiWriter(vault, db, FakeChain(VALID_BODY())).update(bootstrap=True)
+    assert report["skipped_incoherent"] == []
+    assert report["selection_truncated"] == 0
+    assert isinstance(report["skipped_incoherent"], list)
+    assert isinstance(report["selection_truncated"], int)
+    assert report["see_also_pruned"] == 0
+
+
+def test_report_counts_stale_generated_pages(tmp_path):
+    vault = make_vault(tmp_path)
+    db = one_topic_db(vault)
+    orphan = vault / "wiki" / "topics" / "orphan-stale.md"
+    orphan.parent.mkdir(parents=True, exist_ok=True)
+    orphan.write_text("---\ngenerated_by: legion-wiki\ntitle: \"Orphan\"\n"
+                      "page_id: \"topic:gone\"\n---\n# Orphan\n\nbody [[x.md]]",
+                      encoding="utf-8")
+    report = WikiWriter(vault, db, FakeChain(VALID_BODY())).update(bootstrap=True)
+    assert report["pages_written"] == 1
+    assert report["stale_pages"] == 1          # the orphan; the real page is in state
+
+
+def test_relpath_migration_deletes_old_file_on_rename(tmp_path):
+    vault = make_vault(tmp_path)
+    db = one_topic_db(vault)                    # anchor id 'c1n0', path notes/1_0.md
+    WikiWriter(vault, db, FakeChain(VALID_BODY())).update(bootstrap=True)
+    old_page = next((vault / "wiki" / "topics").glob("*.md"))
+    # rename the anchor's title -> new slug -> new relpath, SAME page_id
+    conn = sqlite3.connect(db.db_path)
+    conn.execute("UPDATE nodes SET title=? WHERE id=?", ("Renamed Anchor", "c1n0"))
+    conn.commit()
+    conn.close()
+    report = WikiWriter(vault, db, FakeChain(VALID_BODY())).update()
+    assert report["pages_written"] == 1
+    assert not old_page.exists()                # old file migrated away
+    new_pages = list((vault / "wiki" / "topics").glob("*.md"))
+    assert len(new_pages) == 1
+    assert new_pages[0].name == "renamed-anchor.md"
+    state = json.loads((vault / ".legion" / "wiki-state.json").read_text())
+    assert len(state) == 1                       # one entry, not two
+    (page_id, entry), = state.items()
+    assert page_id == "topic:notes/1_0.md"
+    assert entry["relpath"] == "topics/renamed-anchor.md"

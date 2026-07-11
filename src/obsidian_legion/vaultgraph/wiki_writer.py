@@ -77,24 +77,34 @@ class WikiWriter:
                        max_wall_s: int | None) -> dict:
         report = {"pages_written": 0, "pages_skipped": 0, "pages_deferred": 0,
                   "pages_failed": 0, "noop": False, "wall_clock_stop": False,
-                  "provider_fates": {}}
+                  "provider_fates": {}, "pages_by_provider": {},
+                  "skipped_incoherent": [], "selection_truncated": 0,
+                  "stale_pages": 0, "see_also_pruned": 0}
 
-        specs = [s for s in select_pages(self.db)
-                 if s.wiki_relpath not in self._blocklist()]
+        sel_report: dict = {}
+        blocklist = self._blocklist()
+        specs = [s for s in select_pages(self.db, selection_report=sel_report)
+                 if s.wiki_relpath not in blocklist]
+        report["skipped_incoherent"] = sel_report.get("skipped_incoherent", [])
+        report["selection_truncated"] = sel_report.get("selection_truncated", 0)
         state = self._load_state()
 
+        # Reconcile: state is keyed by page_id; an entry whose recorded relpath
+        # file is gone (out-of-band delete) is dropped and regenerated.
         dropped = 0
-        for page in list(state.keys()):
-            if not (self.wiki_root / page).exists():
-                del state[page]
+        for page_id in list(state.keys()):
+            relpath = state[page_id].get("relpath")
+            if not relpath or not (self.wiki_root / relpath).exists():
+                del state[page_id]
                 dropped += 1
 
         work = []
         for spec in specs:
             current = self._current_sources(spec)
-            entry = state.get(spec.wiki_relpath)
+            entry = state.get(spec.page_id)
             page_file = self.wiki_root / spec.wiki_relpath
             needs = (entry is None or not page_file.exists()
+                     or entry.get("relpath") != spec.wiki_relpath
                      or entry.get("sources") != current
                      or entry.get("mission_hash") != self._mission_hash(current))
             if needs:
@@ -105,6 +115,7 @@ class WikiWriter:
             report["provider_fates"] = {
                 name: ("ready" if ok else "unavailable")
                 for name, ok in self.chain.preflight().items()}
+            report["stale_pages"] = self._count_stale(state)
             return report
 
         cap = bootstrap_cap if bootstrap else budget
@@ -117,6 +128,7 @@ class WikiWriter:
             report["pages_skipped"] = len(to_write)
             report["provider_fates"] = fates
             self._save_state(state)                 # persist reconciliation
+            report["stale_pages"] = self._count_stale(state)
             return report
 
         started = time.monotonic()
@@ -126,11 +138,26 @@ class WikiWriter:
             if max_wall_s is not None and time.monotonic() - started >= max_wall_s:
                 report["wall_clock_stop"] = True
                 break
-            outcome, _provider = self._generate(spec, current, fates)
+            old_entry = state.get(spec.page_id)
+            old_relpath = old_entry.get("relpath") if old_entry else None
+            outcome, provider = self._generate(spec, current, fates)
             if outcome == "written":
                 report["pages_written"] += 1
-                state[spec.wiki_relpath] = {
-                    "sources": current, "mission_hash": self._mission_hash(current)}
+                report["pages_by_provider"][provider] = \
+                    report["pages_by_provider"].get(provider, 0) + 1
+                state[spec.page_id] = {
+                    "relpath": spec.wiki_relpath,
+                    "sources": current,
+                    "mission_hash": self._mission_hash(current),
+                    "provider": provider,
+                    "updated_at": datetime.now().astimezone().isoformat()}
+                # Relpath migration: the anchor slug changed, so the old
+                # generated file is renamed away (deleted after the new write).
+                if old_relpath and old_relpath != spec.wiki_relpath:
+                    old_file = self.wiki_root / old_relpath
+                    if old_file.exists() and _is_generated(
+                            old_file.read_text(encoding="utf-8", errors="ignore")):
+                        old_file.unlink()
             elif outcome == "failed":
                 report["pages_failed"] += 1
             else:
@@ -143,6 +170,7 @@ class WikiWriter:
         self._save_state(state)
         self.write_index(specs)
         report["provider_fates"] = fates
+        report["stale_pages"] = self._count_stale(state)
         return report
 
     def reset(self, regenerate: bool = False) -> dict:
@@ -295,6 +323,21 @@ class WikiWriter:
         payload = f"{MISSION_TEMPLATE_VERSION}\n" + "\n".join(
             f"{relpath}:{current[relpath]}" for relpath in sorted(current))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+    def _count_stale(self, state: dict) -> int:
+        """Generated-marker pages on disk not referenced by any state relpath."""
+        referenced = {entry.get("relpath") for entry in state.values()}
+        stale = 0
+        for sub in ("topics", "entities"):
+            directory = self.wiki_root / sub
+            if not directory.exists():
+                continue
+            for page in directory.glob("*.md"):
+                if f"{sub}/{page.name}" in referenced:
+                    continue
+                if _is_generated(page.read_text(encoding="utf-8", errors="ignore")):
+                    stale += 1
+        return stale
 
     def _blocklist(self) -> set[str]:
         ignore = self.vault_root / ".wikiignore"
