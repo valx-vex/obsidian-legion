@@ -19,6 +19,23 @@ def _wiki(**kw):
     return base
 
 
+def _wiki_v2(**kw):
+    base = _wiki()
+    base.update({
+        "pages_by_provider": {"ollama": 3, "gemini": 1},
+        "skipped_incoherent": ["topics/junk-a.md", "topics/junk-b.md"],
+        "selection_truncated": 7,
+        "stale_pages": 4,
+        "see_also_pruned": 5,
+    })
+    base.update(kw)
+    return base
+
+
+def _wiki_line(text: str) -> str:
+    return next(line for line in text.splitlines() if line.startswith("- wiki:"))
+
+
 def test_writes_dated_file_with_counts(monkeypatch, tmp_path):
     monkeypatch.setattr(report, "REPORT_DIR", tmp_path / "legion")
     when = datetime(2026, 7, 8, 5, 15)
@@ -78,3 +95,29 @@ def test_when_defaults_to_now(monkeypatch, tmp_path):
     monkeypatch.setattr(report, "REPORT_DIR", tmp_path / "legion")
     path = report.write_report("exegesis", _graph(), _wiki())
     assert path.suffix == ".md" and len(path.stem) == 10   # YYYY-MM-DD
+
+
+def test_wiki_v2_keys_render_on_wiki_line(monkeypatch, tmp_path):
+    monkeypatch.setattr(report, "REPORT_DIR", tmp_path / "legion")
+    path = report.write_report("exegesis", _graph(), _wiki_v2(),
+                               when=datetime(2026, 7, 10, 5, 15))
+    line = _wiki_line(path.read_text())
+    assert "pages written=4" in line                       # legacy fields kept
+    assert "pages_by_provider={'ollama': 3, 'gemini': 1}" in line
+    assert "incoherent=2" in line                          # len(skipped_incoherent)
+    assert "truncated=7" in line
+    assert "stale=4" in line
+    assert "see_also_pruned=5" in line
+
+
+def test_wiki_v1_shape_omits_v2_keys(monkeypatch, tmp_path):
+    monkeypatch.setattr(report, "REPORT_DIR", tmp_path / "legion")
+    path = report.write_report("exegesis", _graph(), _wiki(),
+                               when=datetime(2026, 7, 10, 5, 15))
+    line = _wiki_line(path.read_text())
+    for absent in ("pages_by_provider", "incoherent", "truncated", "stale",
+                   "see_also_pruned"):
+        assert absent not in line
+    # Legacy wiki line is byte-for-byte unchanged.
+    assert line == ("- wiki: pages written=4, skipped=0, deferred=2, "
+                    "failed=0, noop=False")

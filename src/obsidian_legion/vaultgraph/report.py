@@ -32,13 +32,25 @@ def _render_wiki(wiki_report) -> list[str]:
         return ["- wiki: not run"]
     if "skipped" in wiki_report:
         return [f"- wiki: skipped — {wiki_report['skipped']}"]
-    return [
-        "- wiki: "
-        f"pages written={wiki_report.get('pages_written', 0)}, "
-        f"skipped={wiki_report.get('pages_skipped', 0)}, "
-        f"deferred={wiki_report.get('pages_deferred', 0)}, "
-        f"failed={wiki_report.get('pages_failed', 0)}, "
+    parts = [
+        f"pages written={wiki_report.get('pages_written', 0)}",
+        f"skipped={wiki_report.get('pages_skipped', 0)}",
+        f"deferred={wiki_report.get('pages_deferred', 0)}",
+        f"failed={wiki_report.get('pages_failed', 0)}",
         f"noop={wiki_report.get('noop', False)}",
+    ]
+    if "pages_by_provider" in wiki_report:
+        parts.append(f"pages_by_provider={wiki_report['pages_by_provider']}")
+    if "skipped_incoherent" in wiki_report:
+        parts.append(f"incoherent={len(wiki_report['skipped_incoherent'])}")
+    if "selection_truncated" in wiki_report:
+        parts.append(f"truncated={wiki_report['selection_truncated']}")
+    if "stale_pages" in wiki_report:
+        parts.append(f"stale={wiki_report['stale_pages']}")
+    if "see_also_pruned" in wiki_report:
+        parts.append(f"see_also_pruned={wiki_report['see_also_pruned']}")
+    return [
+        "- wiki: " + ", ".join(parts),
         f"- providers: {wiki_report.get('provider_fates', {})}",
     ]
 
