@@ -22,9 +22,11 @@ from pathlib import Path
 from .missions import (
     MISSION_TEMPLATE_VERSION, PageSpec, build_mission_prompt, select_pages,
 )
+from .sanitize import extract_title, sanitize_output, yaml_quote
 
-_FRONTMATTER_KEYS = ("generated_by", "sources", "community_id",
-                     "updated_at", "mission_hash")
+_FRONTMATTER_KEYS = ("generated_by", "title", "page_id", "sources",
+                     "community_id", "updated_at", "mission_hash",
+                     "template_version", "provider")
 _GENERATED_MARKER = "generated_by: legion-wiki"
 _GENERATED_LINE_RE = re.compile(r"^generated_by: legion-wiki\s*$", re.MULTILINE)
 
@@ -124,7 +126,7 @@ class WikiWriter:
             if max_wall_s is not None and time.monotonic() - started >= max_wall_s:
                 report["wall_clock_stop"] = True
                 break
-            outcome = self._generate(spec, current, fates)
+            outcome, _provider = self._generate(spec, current, fates)
             if outcome == "written":
                 report["pages_written"] += 1
                 state[spec.wiki_relpath] = {
@@ -184,8 +186,11 @@ class WikiWriter:
         _atomic_write(index, "\n".join(lines) + "\n")
         return index
 
-    def validate_page(self, text: str) -> bool:
+    def validate_page(self, text: str, *, kind: str = "", n_sources: int = 0,
+                      candidates_provided: bool = False) -> bool:
         if not text or not text.strip():
+            return False
+        if "\x1b" in text:                       # residual ANSI escape
             return False
         if not text.lstrip().startswith("---"):
             return False
@@ -198,10 +203,32 @@ class WikiWriter:
                 return False
         if not body.strip():
             return False
-        return "[[" in body and "]]" in body
+        if "[[" not in body or "]]" not in body:
+            return False
+        if "<think>" in text.lower():            # residual reasoning block
+            return False
+        for line in body.splitlines():
+            if line.startswith("Thinking...") or "...done thinking." in line:
+                return False
+        first = next(ln for ln in body.splitlines() if ln.strip())
+        if not re.match(r"^# \S", first):        # authored H1
+            return False
+        if "[[" in first or "|" in first or "`" in first:
+            return False
+        if candidates_provided:
+            idx = body.find("## See also")
+            if idx < 0 or "[[wiki/" not in body[idx:]:
+                return False
+        words = len(body.split())
+        if kind == "topic" and n_sources >= 5 and words < 120:
+            return False
+        if kind == "entity" and words < 60:
+            return False
+        return True
 
     # -- internals ----------------------------------------------------------
-    def _generate(self, spec: PageSpec, current: dict, fates: dict) -> str:
+    def _generate(self, spec: PageSpec, current: dict,
+                  fates: dict) -> tuple[str, str]:
         page_file = self.wiki_root / spec.wiki_relpath
         existing = page_file.read_text(encoding="utf-8") if page_file.exists() else None
         prompt = build_mission_prompt(spec, self.vault_root, existing)
@@ -210,24 +237,37 @@ class WikiWriter:
             for name in getattr(self.chain, "dead_providers", set()):
                 fates[name] = "quota_exhausted"
             if not getattr(result, "ok", False):
-                return "skipped"
+                return "skipped", ""
             if result.provider:
                 fates[result.provider] = "used"
-            page_text = self._compose(spec, current, result.text)
-            if self.validate_page(page_text):
+            body = sanitize_output(result.text)
+            page_text = self._compose(spec, current, body, result.provider)
+            if self.validate_page(
+                    page_text, kind=spec.kind,
+                    n_sources=len(spec.source_relpaths),
+                    candidates_provided=bool(spec.related_candidates)):
                 _atomic_write(page_file, page_text)
-                return "written"
-        return "failed"
+                return "written", result.provider
+        return "failed", ""
 
-    def _compose(self, spec: PageSpec, current: dict, body: str) -> str:
-        body = self._strip_frontmatter(body).strip()
+    def _compose(self, spec: PageSpec, current: dict, body: str,
+                 provider: str) -> str:
+        title, _ = extract_title(body)
+        if title is None:
+            title = spec.title
+            body = f"# {spec.title}\n\n" + body
         community_id = spec.key if spec.kind == "topic" else ""
-        lines = ["---", _GENERATED_MARKER, "sources:"]
+        lines = ["---", _GENERATED_MARKER,
+                 f"title: {yaml_quote(title)}",
+                 f"page_id: {yaml_quote(spec.page_id)}",
+                 "sources:"]
         lines += [f"  - {relpath}" for relpath in spec.source_relpaths]
         lines += [
             f'community_id: "{community_id}"',
             f"updated_at: {datetime.now().astimezone().isoformat()}",
             f"mission_hash: {self._mission_hash(current)}",
+            f"template_version: {MISSION_TEMPLATE_VERSION}",
+            f"provider: {provider}",
             "---",
             "",
         ]

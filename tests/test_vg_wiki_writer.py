@@ -167,15 +167,130 @@ def test_bootstrap_writes_pages_and_index(tmp_path):
 
 def test_validate_page_rules(tmp_path):
     vault = make_vault(tmp_path)
-    writer = WikiWriter(vault, one_topic_db(vault), FakeChain(GOOD_BODY))
-    good = ("---\ngenerated_by: legion-wiki\nsources:\n  - a.md\ncommunity_id: \"1\"\n"
-            "updated_at: x\nmission_hash: abc\n---\nBody with [[a.md]].")
-    assert writer.validate_page(good) is True
-    assert writer.validate_page(good.replace("mission_hash: abc\n", "")) is False
-    assert writer.validate_page("---\ngenerated_by: legion-wiki\nsources: a\n"
-                                "community_id: \"1\"\nupdated_at: x\nmission_hash: y\n"
-                                "---\nNo wikilink here.") is False
+    writer = WikiWriter(vault, one_topic_db(vault), FakeChain(VALID_BODY()))
+    good = v2_page(VALID_BODY())
+    assert writer.validate_page(good, kind="topic", n_sources=1) is True
+    # a missing frontmatter key (drop template_version) -> invalid
+    assert writer.validate_page(
+        good.replace("template_version: v2-encyclo-1\n", ""),
+        kind="topic", n_sources=1) is False
+    # body without any wikilink -> invalid
+    assert writer.validate_page(
+        v2_page("# Title\n\nProse with no wikilink at all here."),
+        kind="topic", n_sources=1) is False
+    # empty text -> invalid
     assert writer.validate_page("") is False
+
+
+def test_validate_page_v2_rejects_corruption_and_bad_h1(tmp_path):
+    vault = make_vault(tmp_path)
+    writer = WikiWriter(vault, one_topic_db(vault), FakeChain(VALID_BODY()))
+    good = v2_page(VALID_BODY())
+    assert writer.validate_page(good, kind="topic", n_sources=1) is True
+    # residual ESC byte anywhere in the text
+    assert writer.validate_page(good + "\x1b", kind="topic", n_sources=1) is False
+    # <think> reasoning span
+    assert writer.validate_page(
+        v2_page(VALID_BODY() + "\n\n<think>internal</think>"),
+        kind="topic", n_sources=1) is False
+    # gpt-oss 'Thinking...' line
+    assert writer.validate_page(
+        v2_page("# T\n\nThinking...\nlead with [[a.md]] and words."),
+        kind="topic", n_sources=1) is False
+    # gpt-oss '...done thinking.' line
+    assert writer.validate_page(
+        v2_page("# T\n\nsummary ...done thinking.\nlead [[a.md]] words."),
+        kind="topic", n_sources=1) is False
+    # missing H1 (first body line is prose)
+    assert writer.validate_page(
+        v2_page("Just prose with [[a.md]] and no heading."),
+        kind="topic", n_sources=1) is False
+    # H1 containing [[
+    assert writer.validate_page(
+        v2_page("# Title [[x]]\n\nlead [[a.md]] words."),
+        kind="topic", n_sources=1) is False
+    # H1 containing |
+    assert writer.validate_page(
+        v2_page("# Title | Sub\n\nlead [[a.md]] words."),
+        kind="topic", n_sources=1) is False
+    # H1 containing a backtick
+    assert writer.validate_page(
+        v2_page("# Title `code`\n\nlead [[a.md]] words."),
+        kind="topic", n_sources=1) is False
+
+
+def test_validate_see_also_required_iff_candidates(tmp_path):
+    vault = make_vault(tmp_path)
+    writer = WikiWriter(vault, one_topic_db(vault), FakeChain(VALID_BODY()))
+    no_sa = v2_page(VALID_BODY())
+    with_sa = v2_page(VALID_BODY(see_also=["topics/other.md"]))
+    # candidates provided -> a See also section with a wiki link is mandatory
+    assert writer.validate_page(no_sa, kind="topic", n_sources=1,
+                                candidates_provided=True) is False
+    assert writer.validate_page(with_sa, kind="topic", n_sources=1,
+                                candidates_provided=True) is True
+    # no candidates -> the section is waived
+    assert writer.validate_page(no_sa, kind="topic", n_sources=1,
+                                candidates_provided=False) is True
+
+
+def test_validate_page_v2_word_floors(tmp_path):
+    vault = make_vault(tmp_path)
+    writer = WikiWriter(vault, one_topic_db(vault), FakeChain(VALID_BODY()))
+    # topic with >=5 sources under 120 words -> reject
+    assert writer.validate_page(v2_page(VALID_BODY(words=100)),
+                                kind="topic", n_sources=5) is False
+    assert writer.validate_page(v2_page(VALID_BODY(words=130)),
+                                kind="topic", n_sources=5) is True
+    # entity under 60 words -> reject
+    assert writer.validate_page(v2_page(VALID_BODY(words=50)),
+                                kind="entity", n_sources=1) is False
+    assert writer.validate_page(v2_page(VALID_BODY(words=70)),
+                                kind="entity", n_sources=1) is True
+
+
+def test_compose_quotes_title_with_colon_and_writes_v2_keys(tmp_path):
+    vault = make_vault(tmp_path)
+    writer = WikiWriter(vault, one_topic_db(vault), FakeChain(VALID_BODY()))
+    spec = PageSpec("topic", "7", "topics/docker.md", "Docker Anchor",
+                    ["notes/a.md"], page_id="topic:notes/a.md")
+    body = VALID_BODY(title="Docker: from dev to prod")
+    page = writer._compose(spec, {"notes/a.md": "sha"}, body, "minimax-m3:cloud")
+    lines = page.splitlines()
+    assert 'title: "Docker: from dev to prod"' in lines   # colon-safe, quoted
+    assert 'page_id: "topic:notes/a.md"' in lines
+    assert "template_version: v2-encyclo-1" in lines
+    assert "provider: minimax-m3:cloud" in lines
+
+
+def test_compose_fallback_title_prepends_h1(tmp_path):
+    vault = make_vault(tmp_path)
+    writer = WikiWriter(vault, one_topic_db(vault), FakeChain(VALID_BODY()))
+    spec = PageSpec("topic", "1", "topics/x.md", "Fallback Anchor",
+                    ["notes/a.md"], page_id="topic:notes/a.md")
+    body = "This body has no level-one heading. See [[notes/a.md]]."
+    page = writer._compose(spec, {"notes/a.md": "sha"}, body, "fake")
+    assert 'title: "Fallback Anchor"' in page.splitlines()
+    body_part = page.split("---")[2]
+    first = [ln for ln in body_part.splitlines() if ln.strip()][0]
+    assert first == "# Fallback Anchor"                    # H1 prepended
+
+
+def test_generate_strips_reasoning_and_ansi_end_to_end(tmp_path):
+    vault = make_vault(tmp_path)
+    db = one_topic_db(vault)
+    corrupted = ("\x1b[2K\x1b[K<think>internal reasoning here</think>\n"
+                 "# Salvaged Title\n\n"
+                 "The subject is grounded in [[notes/1_0.md]] and related "
+                 "notes. " + "context " * 130)
+    report = WikiWriter(vault, db, FakeChain(corrupted)).update(bootstrap=True)
+    assert report["pages_written"] == 1
+    page = next((vault / "wiki" / "topics").glob("*.md"))
+    text = page.read_text()
+    assert "\x1b" not in text
+    assert "<think>" not in text.lower()
+    assert "# Salvaged Title" in text
+    assert 'title: "Salvaged Title"' in text
 
 
 def test_second_run_is_noop_and_writes_nothing(tmp_path):
