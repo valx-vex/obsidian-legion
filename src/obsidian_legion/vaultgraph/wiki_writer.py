@@ -327,6 +327,35 @@ class WikiWriter:
                 sections_removed += removed
         return {"links_pruned": links_pruned, "sections_removed": sections_removed}
 
+    def prune(self, apply: bool = False) -> dict:
+        protected: set[str] = set()
+        for entry in self._load_state().values():
+            relpath = entry.get("relpath") if isinstance(entry, dict) else None
+            if relpath:
+                protected.add(relpath)
+        for spec in select_pages(self.db):
+            protected.add(spec.wiki_relpath)
+        candidates: list[str] = []
+        for sub in ("topics", "entities"):
+            directory = self.wiki_root / sub
+            if not directory.exists():
+                continue
+            for page in sorted(directory.glob("*.md")):
+                relpath = f"{sub}/{page.name}"
+                if relpath in protected:
+                    continue
+                if not _is_generated(page.read_text(encoding="utf-8", errors="ignore")):
+                    continue
+                candidates.append(relpath)
+        deleted = 0
+        if apply:
+            for relpath in candidates:
+                page = self.wiki_root / relpath
+                if page.exists():
+                    page.unlink()
+                    deleted += 1
+        return {"candidates": candidates, "deleted": deleted}
+
     def validate_page(self, text: str, *, kind: str = "", n_sources: int = 0,
                       candidates_provided: bool = False) -> bool:
         if not text or not text.strip():

@@ -701,3 +701,47 @@ def test_reconcile_see_also_removes_emptied_section(tmp_path):
     assert "## See also" not in text                # header gone
     assert "Lead paragraph stays." in text          # rest of body intact
     assert "## Details" in text and "Detail body stays." in text
+
+
+def test_prune_dry_run_and_apply(tmp_path):
+    vault = make_vault(tmp_path)
+    # bare DB -> select_pages returns [] (no protected relpaths from selection)
+    db = FakeGraphDB(vault / ".legion" / "graph.sqlite")
+    writer = WikiWriter(vault, db, FakeChain(GOOD_BODY))
+    topics = vault / "wiki" / "topics"
+    topics.mkdir(parents=True)
+    (topics / "kept.md").write_text(_generated_page("Kept", "topic:kept"),
+                                    encoding="utf-8")     # protected via state
+    (topics / "orphan.md").write_text(_generated_page("Orphan", "topic:orphan"),
+                                      encoding="utf-8")   # not in state/selection
+    (topics / "bake.md").write_text(                      # bakeoff marker under topics/
+        "---\ngenerated_by: vexpedia-bakeoff\n---\nx\n", encoding="utf-8")
+    state = {"topic:kept": {"relpath": "topics/kept.md", "sources": {},
+                            "mission_hash": "h", "provider": "fake",
+                            "updated_at": "x"}}
+    (vault / ".legion" / "wiki-state.json").write_text(json.dumps(state),
+                                                       encoding="utf-8")
+    dry = writer.prune(apply=False)
+    assert dry["candidates"] == ["topics/orphan.md"]      # only the orphan
+    assert dry["deleted"] == 0
+    assert (topics / "orphan.md").exists()                # dry-run deletes nothing
+    applied = writer.prune(apply=True)
+    assert applied["candidates"] == ["topics/orphan.md"]
+    assert applied["deleted"] == 1
+    assert not (topics / "orphan.md").exists()
+    assert (topics / "kept.md").exists()                  # state-protected kept
+    assert (topics / "bake.md").exists()                  # bakeoff marker never a candidate
+
+
+def test_prune_ignores_blocklist_protection(tmp_path):
+    vault = make_vault(tmp_path)
+    db = FakeGraphDB(vault / ".legion" / "graph.sqlite")
+    writer = WikiWriter(vault, db, FakeChain(GOOD_BODY))
+    entities = vault / "wiki" / "entities"
+    entities.mkdir(parents=True)
+    (entities / "blocked.md").write_text(
+        _generated_page("Blocked", "entity:blocked"), encoding="utf-8")
+    (vault / ".wikiignore").write_text("# pages\nentities/blocked.md\n",
+                                       encoding="utf-8")
+    result = writer.prune(apply=False)
+    assert "entities/blocked.md" in result["candidates"]   # blocklist does not protect
