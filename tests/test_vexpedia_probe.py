@@ -118,3 +118,35 @@ def test_privacy_fails_untraceable_private_literal(tmp_path):
     ok, messages = probe.probe_privacy(vault)
     assert ok is False
     assert any("murphy_private" in m for m in messages)
+
+
+def test_index_exact_match_passes(tmp_path):
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    _write_page(wiki, "topics/a.md", body="# A\n\nBody.")
+    _write_page(wiki, "entities/b.md", body="# B\n\nBody.")
+    _write_index(wiki, ["topics/a.md", "entities/b.md"])
+    ok, messages = probe.probe_index(vault)
+    assert ok is True
+    assert any("exact match" in m for m in messages)
+
+
+def test_index_extra_row_fails(tmp_path):
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    _write_page(wiki, "topics/a.md", body="# A\n\nBody.")
+    _write_index(wiki, ["topics/a.md", "topics/ghost.md"])  # ghost not on disk
+    ok, messages = probe.probe_index(vault)
+    assert ok is False
+    assert any("ghost.md" in m for m in messages)
+
+
+def test_index_extra_disk_page_fails(tmp_path):
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    _write_page(wiki, "topics/a.md", body="# A\n\nBody.")
+    _write_page(wiki, "topics/b.md", body="# B\n\nBody.")
+    _write_index(wiki, ["topics/a.md"])                     # b.md not listed
+    ok, messages = probe.probe_index(vault)
+    assert ok is False
+    assert any("topics/b.md" in m for m in messages)

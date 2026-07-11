@@ -128,3 +128,43 @@ def probe_privacy(vault_root) -> tuple[bool, list[str]]:
     if ok:
         messages.append("privacy: clean")
     return ok, messages
+
+
+def _is_generated(text: str) -> bool:
+    return bool(_GENERATED_LINE_RE.search(text))
+
+
+def _generated_disk_pages(wiki: Path) -> set[str]:
+    """Relpaths (topics/..., entities/...) of generated pages on disk."""
+    pages: set[str] = set()
+    for sub in ("topics", "entities"):
+        directory = wiki / sub
+        if not directory.exists():
+            continue
+        for page in directory.glob("*.md"):
+            if _is_generated(page.read_text(encoding="utf-8", errors="replace")):
+                pages.add(f"{sub}/{page.name}")
+    return pages
+
+
+def probe_index(vault_root) -> tuple[bool, list[str]]:
+    """index.md links must equal the generated pages on disk, both directions."""
+    root = Path(vault_root)
+    wiki = root / "wiki"
+    index = wiki / "index.md"
+    if not index.exists():
+        return False, [f"index: missing {index}"]
+    listed = set(_WIKI_LINK_RE.findall(
+        index.read_text(encoding="utf-8", errors="replace")))
+    on_disk = _generated_disk_pages(wiki)
+    ghost = listed - on_disk
+    missing = on_disk - listed
+    ok = not ghost and not missing
+    messages: list[str] = []
+    if ghost:
+        messages.append(f"index: links to absent pages: {sorted(ghost)}")
+    if missing:
+        messages.append(f"index: disk pages not listed: {sorted(missing)}")
+    if ok:
+        messages.append(f"index: exact match ({len(on_disk)} pages)")
+    return ok, messages
