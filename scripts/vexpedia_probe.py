@@ -42,3 +42,89 @@ def probe_corruption(directory) -> tuple[bool, list[str]]:
     if ok:
         messages.append("corruption: clean")
     return ok, messages
+
+
+def _split_frontmatter(text: str) -> tuple[str, str]:
+    """Return (frontmatter, body); ('', text) when there is no --- frontmatter."""
+    if not text.lstrip().startswith("---"):
+        return "", text
+    parts = text.split("---")
+    if len(parts) < 3:
+        return "", text
+    return parts[1], "---".join(parts[2:])
+
+
+def _parse_sources(frontmatter: str) -> list[str]:
+    """Read the `sources:` YAML list items out of a frontmatter block."""
+    sources: list[str] = []
+    in_sources = False
+    for line in frontmatter.splitlines():
+        if re.match(r"^sources:\s*$", line):
+            in_sources = True
+            continue
+        if not in_sources:
+            continue
+        item = re.match(r"^\s+-\s+(.+?)\s*$", line)
+        if item:
+            sources.append(item.group(1))
+        elif line.strip() == "":
+            continue
+        else:
+            break                       # the next top-level key ends the block
+    return sources
+
+
+def _private_names(vault_root: Path) -> set[str]:
+    """Basenames AND stems of every file under any `.murphy_private` dir."""
+    names: set[str] = set()
+    for private_dir in vault_root.rglob(_PRIVATE):
+        if not private_dir.is_dir():
+            continue
+        for f in private_dir.rglob("*"):
+            if f.is_file():
+                names.add(f.name)
+                names.add(f.stem)
+    names.discard("")
+    return names
+
+
+def probe_privacy(vault_root) -> tuple[bool, list[str]]:
+    """Three-part content-surface privacy probe (spec §9.6)."""
+    root = Path(vault_root)
+    wiki = root / "wiki"
+    private_names = _private_names(root)
+    ok = True
+    messages: list[str] = []
+    for md in sorted(wiki.rglob("*.md")):
+        text = md.read_text(encoding="utf-8", errors="replace")
+        frontmatter, body = _split_frontmatter(text)
+        sources = _parse_sources(frontmatter)
+        # (a) no source path may live under .murphy_private
+        for src in sources:
+            if _PRIVATE in src:
+                ok = False
+                messages.append(f"{md}: private source listed: {src}")
+        # (b) no private basename/stem may surface anywhere in the page
+        for name in private_names:
+            if name in text:
+                ok = False
+                messages.append(f"{md}: private name surfaced: {name}")
+        # (c) a literal .murphy_private in the body must trace to a listed source
+        if _PRIVATE in body:
+            traceable = False
+            for src in sources:
+                try:
+                    src_text = (root / src).read_text(
+                        encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if _PRIVATE in src_text:
+                    traceable = True
+                    break
+            if not traceable:
+                ok = False
+                messages.append(
+                    f"{md}: untraceable .murphy_private literal in body")
+    if ok:
+        messages.append("privacy: clean")
+    return ok, messages

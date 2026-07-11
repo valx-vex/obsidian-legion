@@ -72,3 +72,49 @@ def test_corruption_thinking_line_fails(tmp_path):
     ok, messages = probe.probe_corruption(tmp_path)
     assert ok is False
     assert any("Thinking" in m for m in messages)
+
+
+def test_privacy_fails_on_private_source(tmp_path):
+    vault = tmp_path / "vault"
+    _write_page(vault / "wiki", "topics/a.md",
+                sources=[".murphy_private/garden.md", "notes/pub.md"],
+                body="# A\n\nBody.")
+    ok, messages = probe.probe_privacy(vault)
+    assert ok is False
+    assert any(".murphy_private" in m for m in messages)
+
+
+def test_privacy_fails_on_private_basename_stem(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / ".murphy_private").mkdir(parents=True)
+    (vault / ".murphy_private" / "secret-garden.md").write_text(
+        "private", encoding="utf-8")
+    _write_page(vault / "wiki", "topics/a.md", sources=["notes/pub.md"],
+                body="# A\n\nDiscusses secret-garden at length.")
+    ok, messages = probe.probe_privacy(vault)
+    assert ok is False
+    assert any("secret-garden" in m for m in messages)
+
+
+def test_privacy_passes_traceable_public_mention(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "notes").mkdir(parents=True)
+    (vault / "notes" / "essay.md").write_text(
+        "An essay that names the .murphy_private folder in prose.",
+        encoding="utf-8")
+    _write_page(vault / "wiki", "topics/a.md", sources=["notes/essay.md"],
+                body="# A\n\nThe source discusses the .murphy_private folder.")
+    ok, messages = probe.probe_privacy(vault)
+    assert ok is True
+
+
+def test_privacy_fails_untraceable_private_literal(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "notes").mkdir(parents=True)
+    (vault / "notes" / "clean.md").write_text(
+        "A perfectly clean public note.", encoding="utf-8")
+    _write_page(vault / "wiki", "topics/a.md", sources=["notes/clean.md"],
+                body="# A\n\nLeaks the .murphy_private literal with no source.")
+    ok, messages = probe.probe_privacy(vault)
+    assert ok is False
+    assert any("murphy_private" in m for m in messages)
