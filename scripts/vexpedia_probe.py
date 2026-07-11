@@ -216,3 +216,47 @@ def probe_mobile(src_vault, dest_vault) -> tuple[bool, list[str]]:
     if ok:
         messages.append(f"mobile: {len(src)} pages match")
     return ok, messages
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="vexpedia_probe",
+        description="VEXPEDIA v2 acceptance probes (spec §10)")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_corr = sub.add_parser("corruption")
+    p_corr.add_argument("dir")
+
+    p_priv = sub.add_parser("privacy")
+    p_priv.add_argument("vault_root")
+
+    p_idx = sub.add_parser("index")
+    p_idx.add_argument("vault_root")
+
+    p_dead = sub.add_parser("deadlinks")
+    p_dead.add_argument("vault_root")
+
+    p_mob = sub.add_parser("mobile")
+    p_mob.add_argument("src_vault")
+    p_mob.add_argument("dest_vault")
+
+    args = parser.parse_args(argv)
+
+    if args.cmd == "corruption":
+        ok, messages = probe_corruption(args.dir)
+    elif args.cmd == "privacy":
+        ok, messages = probe_privacy(args.vault_root)
+    elif args.cmd == "index":
+        ok, messages = probe_index(args.vault_root)
+    elif args.cmd == "deadlinks":
+        ok, messages = probe_deadlinks(args.vault_root)
+    else:
+        ok, messages = probe_mobile(args.src_vault, args.dest_vault)
+
+    for message in messages:
+        print(message)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

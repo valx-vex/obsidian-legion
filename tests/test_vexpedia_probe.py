@@ -210,3 +210,10 @@ def test_mobile_dest_extra_file_fails(tmp_path):
     ok, messages = probe.probe_mobile(src, dest)
     assert ok is False
     assert any("topics/extra.md" in m for m in messages)
+
+
+def test_main_exit_codes(tmp_path):
+    (tmp_path / "clean.md").write_text("# A\n\nClean prose.", encoding="utf-8")
+    assert probe.main(["corruption", str(tmp_path)]) == 0     # pass -> 0
+    (tmp_path / "bad.md").write_text("# B\n\n<think>x</think>", encoding="utf-8")
+    assert probe.main(["corruption", str(tmp_path)]) == 1     # fail -> 1
